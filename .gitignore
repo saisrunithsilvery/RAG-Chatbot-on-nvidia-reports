@@ -7,6 +7,10 @@ __pycache__/
 *.so
 dump.rdb
 
+uploads/
+__pycache__/
+
+
 # Distribution / packaging
 .Python
 build/
