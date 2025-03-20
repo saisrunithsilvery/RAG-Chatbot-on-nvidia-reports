@@ -8,10 +8,14 @@ from datetime import datetime, timedelta
 import requests
 import json
 import os
+import sys
+sys.path.append('/opt/airflow')
 import tempfile
 import boto3
 import logging
 from rag.chunking import chunk_by_character_with_embeddings, chunk_by_tokens_with_embeddings, chunk_recursively_with_embeddings
+from vectordb.chromadb import store_in_chroma
+from vectordb.pinecone import store_in_pinecone
 
 
 logger = logging.getLogger(__name__)
@@ -27,17 +31,19 @@ default_args = {
 
 PARSER_SERVICE_URLS = {
     'docling': 'http://localhost:8001/',
-    'mistral_ocr': 'http://locslhost:8002/',
+    'mistral_ocr': 'http://localhost:8002/',  # Fixed typo in URL
     'opensource': 'http://assignment1-parser-service:8003/'
 }
 
-CHUNK_TYPES = {
-    'chunk_by_character_with_embeddings': 'chunk_by_character_with_embeddings',
-    'chunk_by_tokens_with_embeddings': 'chunk_by_tokens_with_embeddings',
-    'chunk_by_tokens_with_embeddings': 'chunk_by_tokens_with_embeddings'
+# Define supported chunking strategies
+CHUNKING_STRATEGIES = {
+    'character': chunk_by_character_with_embeddings,
+    'token': chunk_by_tokens_with_embeddings,
+    'recursive': chunk_recursively_with_embeddings
 }
 
-
+# Define supported vector databases
+VECTOR_DBS = ['pinecone', 'chroma', 'milvus', 'qdrant']
 
 # S3 configuration
 S3_BUCKET = 'nvidia-quarterly-reports'
@@ -71,10 +77,12 @@ def process_request(**kwargs):
     
     # Extract parameters from dag_run.conf
     parser_type = dag_run.conf.get('parser_type', 'docling')
-    chunking_strategy = dag_run.conf.get('chunking_strategy', 'semantic_sections')
-    vector_db = dag_run.conf.get('vector_db', 'manual')
+    chunking_strategy = dag_run.conf.get('chunking_strategy', 'recursive')  # Changed default to a valid strategy
+    vector_db = dag_run.conf.get('vector_db', 'chroma')  # Changed default to a supported DB
     s3_folder = dag_run.conf.get('s3_folder', 'default_folder')
-    quarter = dag_run.conf.get('quarter', 'all')
+    quarter = dag_run.conf.get('quarter', 'Q1_2023')  # Added default quarter
+    chunk_size = dag_run.conf.get('chunk_size', 1000)  # Added chunk size parameter
+    chunk_overlap = dag_run.conf.get('chunk_overlap', 200)  # Added chunk overlap parameter
     
     # Construct the S3 file path
     input_file_path = f's3://{S3_BUCKET}/{s3_folder}/input.pdf'
@@ -86,14 +94,19 @@ def process_request(**kwargs):
     logger.info(f"- Vector DB: {vector_db}")
     logger.info(f"- S3 Folder: {s3_folder}")
     logger.info(f"- Quarter: {quarter}")
+    logger.info(f"- Chunk Size: {chunk_size}")
+    logger.info(f"- Chunk Overlap: {chunk_overlap}")
     logger.info(f"- Input File Path: {input_file_path}")
     
-    # # Validate parameters
-    # if parser_type not in PARSER_SERVICE_URLS:
-    #     raise ValueError(f"Invalid parser type: {parser_type}")
+    # Validate parameters
+    if parser_type not in PARSER_SERVICE_URLS:
+        raise ValueError(f"Invalid parser type: {parser_type}. Supported types: {list(PARSER_SERVICE_URLS.keys())}")
     
-    # if vector_db not in VECTOR_DB_SERVICE_URLS:
-    #     raise ValueError(f"Invalid vector DB: {vector_db}")
+    if chunking_strategy not in CHUNKING_STRATEGIES:
+        raise ValueError(f"Invalid chunking strategy: {chunking_strategy}. Supported strategies: {list(CHUNKING_STRATEGIES.keys())}")
+    
+    if vector_db not in VECTOR_DBS:
+        raise ValueError(f"Invalid vector DB: {vector_db}. Supported DBs: {VECTOR_DBS}")
     
     # Pass parameters to downstream tasks
     ti.xcom_push(key='parser_type', value=parser_type)
@@ -102,6 +115,8 @@ def process_request(**kwargs):
     ti.xcom_push(key='input_file_path', value=input_file_path)
     ti.xcom_push(key='quarter', value=quarter)
     ti.xcom_push(key='s3_folder', value=s3_folder)
+    ti.xcom_push(key='chunk_size', value=chunk_size)
+    ti.xcom_push(key='chunk_overlap', value=chunk_overlap)
     
     return "Request processed successfully"
 
@@ -116,11 +131,18 @@ def parse_document(**kwargs):
     
     parser_url = PARSER_SERVICE_URLS[parser_type]
     
-    # Send request to parser service
+    # Download from S3 to a local temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+        local_input_path = tmp.name
+    
     try:
+        download_from_s3(input_file_path, local_input_path)
+        logger.info(f"Downloaded input file to {local_input_path}")
+        
+        # Send request to parser service
         response = requests.post(
             parser_url,
-            json={'input_file_path': s3_folder}
+            json={'input_file_path': local_input_path}
         )
         
         response.raise_for_status()
@@ -138,19 +160,58 @@ def parse_document(**kwargs):
     except requests.exceptions.RequestException as e:
         logger.error(f"Error calling parser service: {e}")
         raise
+    except Exception as e:
+        logger.error(f"Error in parse_document: {e}")
+        raise
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(local_input_path):
+            os.unlink(local_input_path)
 
 def chunk_document(**kwargs):
-    """Send the parsed document to the chunking service"""
+    """Chunk the parsed document and generate embeddings"""
     ti = kwargs['ti']
     
     # Get parameters from previous tasks
     chunking_strategy = ti.xcom_pull(task_ids='process_request', key='chunking_strategy')
     parsed_file_path = ti.xcom_pull(task_ids='parse_document')
     quarter = ti.xcom_pull(task_ids='process_request', key='quarter')
+    chunk_size = ti.xcom_pull(task_ids='process_request', key='chunk_size')
+    chunk_overlap = ti.xcom_pull(task_ids='process_request', key='chunk_overlap')
+
+    # Get the appropriate chunking function
+    if chunking_strategy in CHUNKING_STRATEGIES:
+        chunking_function = CHUNKING_STRATEGIES[chunking_strategy]
+    else:
+        raise ValueError(f"Invalid chunking strategy: {chunking_strategy}")
     
-   
-    if chunking_strategy in CHUNK_TYPES:
-        chunking_function = CHUNK_TYPES[chunking_strategy]
+    try:
+        # Add metadata for the chunks
+        metadata = {
+            "quarter": quarter,
+            "source_file": parsed_file_path,
+            "processing_date": datetime.now().strftime("%Y-%m-%d")
+        }
+        
+        # Apply chunking function with appropriate parameters
+        embeddings = chunking_function(
+            url=parsed_file_path,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            common_metadata=metadata
+        )
+        
+        logger.info(f"Document chunked successfully into {len(embeddings)} chunks")
+        
+        # Save the file path and embeddings to XCom
+        ti.xcom_push(key='chunked_file_path', value=parsed_file_path)
+        ti.xcom_push(key='embeddings', value=embeddings)
+        
+        return parsed_file_path
+        
+    except Exception as e:
+        logger.error(f"Error in chunk_document: {str(e)}")
+        raise
 
 def store_in_vector_db(**kwargs):
     """Send the chunked document to the selected vector DB service"""
@@ -158,37 +219,45 @@ def store_in_vector_db(**kwargs):
     
     # Get parameters from previous tasks
     vector_db = ti.xcom_pull(task_ids='process_request', key='vector_db')
-    chunked_file_path = ti.xcom_pull(task_ids='chunk_document')
+    chunked_file_path = ti.xcom_pull(task_ids='chunk_document', key='chunked_file_path')
     quarter = ti.xcom_pull(task_ids='process_request', key='quarter')
+    embeddings = ti.xcom_pull(task_ids='chunk_document', key='embeddings')
     
-    vector_db_url = VECTOR_DB_SERVICE_URLS[vector_db]
+    # Ensure we have all required data
+    if not chunked_file_path:
+        chunked_file_path = ti.xcom_pull(task_ids='chunk_document')
     
-    # Send request to vector DB service
+    if not embeddings:
+        logger.error("No embeddings found in XCom")
+        raise ValueError("No embeddings found in XCom")
+    
+    # Store in the appropriate vector database
+    logger.info(f"Storing {len(embeddings)} embeddings in {vector_db}")
+    
+    result = None
+    
     try:
-        response = requests.post(
-            vector_db_url,
-            json={
-                'input_file_path': chunked_file_path,
-                'quarter': quarter
-            }
-        )
+        if vector_db.lower() == 'pinecone':
+            result = store_in_pinecone(embeddings, chunked_file_path, quarter)
+        elif vector_db.lower() == 'chroma':
+            result = store_in_chroma(embeddings, chunked_file_path, quarter)
+        elif vector_db.lower() == 'milvus':
+            result = store_in_milvus(embeddings, chunked_file_path, quarter)
+        elif vector_db.lower() == 'qdrant':
+            result = store_in_qdrant(embeddings, chunked_file_path, quarter)
+        else:
+            raise ValueError(f"Unsupported vector database: {vector_db}")
         
-        response.raise_for_status()
-        stored_data = response.json()
+        # Store the result (collection/index name) for downstream tasks
+        ti.xcom_push(key='vector_db_location', value=result)
         
-        # Get the index ID or other reference from the vector DB service response
-        index_reference = stored_data.get('index_reference')
+        logger.info(f"Successfully stored embeddings in {vector_db} at {result}")
+        return result
         
-        if not index_reference:
-            raise ValueError("No index reference returned from vector DB service")
-        
-        logger.info(f"Document stored in vector DB successfully: {index_reference}")
-        return index_reference
-    
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Error calling vector DB service: {e}")
+    except Exception as e:
+        logger.error(f"Error in store_in_vector_db: {str(e)}")
         raise
-
+      
 # Create the DAG
 with DAG(
     'nvidia_rag_pipeline',
