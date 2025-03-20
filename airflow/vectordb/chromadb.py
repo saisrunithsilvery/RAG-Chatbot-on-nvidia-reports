@@ -4,7 +4,7 @@ import logging
 import uuid
 from typing import List, Dict, Any
 import chromadb
-from chromadb.config import Settings
+
 
 logger = logging.getLogger(__name__)
 

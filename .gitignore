@@ -2,11 +2,11 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+myenv/
 # C extensions
 *.so
 dump.rdb
-
+logs/
 # Distribution / packaging
 .Python
 build/
