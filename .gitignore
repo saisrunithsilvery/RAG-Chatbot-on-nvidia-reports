@@ -6,6 +6,11 @@ myenv/
 # C extensions
 *.so
 dump.rdb
+
+uploads/
+__pycache__/
+
+
 logs/
 # Distribution / packaging
 .Python
