@@ -1,0 +1,24 @@
+openpyxl
+pathlib
+markdown-it-py
+python-dotenv
+python-dotenv
+docling
+streamlit
+python-multipart
+pillow
+
+
+# streamlit==1.42.0
+# fastapi==0.110.0
+# uvicorn==0.27.1
+# pydantic==2.7.1
+# pillow==10.3.0  
+# docling==2.4.0
+# docling-core<3.0.0
+# python-multipart
+# python-dotenv
+# openpyxl>=3.0.10
+# pathlib
+# markdown-it-py>=2.0.0
+# logging
