@@ -16,12 +16,10 @@ from chunking_evaluation.utils import openai_token_count
 
 def chunk_document(
     url: str,
-    chunking_strategy: str = "recursive",
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-    model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-    document_metadata: Optional[Dict[str, Any]] = None,
-    min_chunk_size: int = 50  # For Kamradt strategy
+    chunking_strategy: str = "recursive"
+    # chunk_size: int = 300,
+    # chunk_overlap: int = 50,
+    # min_chunk_size: int = 50  # For Kamradt strategy
 ) -> List[Dict[str, Any]]:
     """
     Main function to chunk a document and generate embeddings using the specified strategy.
@@ -38,9 +36,11 @@ def chunk_document(
     Returns:
         List of dictionaries containing chunk text, embeddings, and metadata
     """
-    # Default metadata if none provided
-    if document_metadata is None:
-        document_metadata = {}
+
+    chunk_size = 300,
+    chunk_overlap = 50,
+    min_chunk_size = 50
+    model_name= "sentence-transformers/all-MiniLM-L6-v2"
     
     # Common metadata for all chunks
     common_metadata = {
@@ -49,7 +49,6 @@ def chunk_document(
         "chunk_size": chunk_size, 
         "embedding_model": model_name,
         "processing_timestamp": datetime.now().isoformat(),
-        **document_metadata
     }
     
     # Add chunk_overlap for traditional chunkers
@@ -86,7 +85,7 @@ def chunk_document(
         tmp_path = tmp.name
     
     print(f"Chunked document into {len(result)} segments using {chunking_strategy} strategy")
-    print(f"Saved embeddings to temporary file: {tmp_path}")
+    print(f"Saved chunking to temporary file: {tmp_path}")
     
     return result, tmp_path
 
@@ -149,12 +148,12 @@ def chunk_by_character_with_embeddings(
     chunks = text_splitter.split_documents(docs)
     
     # Initialize the embeddings model
-    embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    # embeddings = HuggingFaceEmbeddings(model_name=model_name)
     
     # Create embeddings for each chunk
     result = []
     for i, chunk in enumerate(chunks):
-        embedding_vector = embeddings.embed_query(chunk.page_content)
+        # embedding_vector = embeddings.embed_query(chunk.page_content)
         
         # Combine document metadata with common metadata
         chunk_metadata = {
@@ -165,8 +164,7 @@ def chunk_by_character_with_embeddings(
         }
         
         result.append({
-            "text": chunk.page_content,
-            "embedding": embedding_vector,
+            "chunks": chunks,
             "metadata": chunk_metadata
         })
     
@@ -215,7 +213,7 @@ def chunk_by_tokens_with_embeddings(
     # Create embeddings for each chunk
     result = []
     for i, chunk in enumerate(chunks):
-        embedding_vector = embeddings.embed_query(chunk.page_content)
+        # embedding_vector = embeddings.embed_query(chunk.page_content)
         
         # Combine document metadata with common metadata
         chunk_metadata = {
@@ -226,8 +224,7 @@ def chunk_by_tokens_with_embeddings(
         }
         
         result.append({
-            "text": chunk.page_content,
-            "embedding": embedding_vector,
+            "chunks": chunks,
             "metadata": chunk_metadata
         })
     
@@ -324,19 +321,18 @@ def chunk_kamradt_with_embeddings(
     docs = _load_document(url)
     
     # Initialize HuggingFace embeddings model
-    hf_embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    # hf_embeddings = HuggingFaceEmbeddings(model_name=model_name)
     
     # Create a wrapper embedding function compatible with KamradtModifiedChunker
-    def embedding_function(texts):
-        if isinstance(texts, str):
-            return hf_embeddings.embed_query(texts)
-        return [hf_embeddings.embed_query(text) for text in texts]
+    # def embedding_function(texts):
+    #     if isinstance(texts, str):
+    #         return hf_embeddings.embed_query(texts)
+    #     return [hf_embeddings.embed_query(text) for text in texts]
     
     # Initialize the KamradtModifiedChunker
     text_splitter = KamradtModifiedChunker(
         avg_chunk_size=chunk_size,
         min_chunk_size=min_chunk_size,
-        embedding_function=embedding_function
     )
     
     # Process each document
@@ -346,23 +342,22 @@ def chunk_kamradt_with_embeddings(
         chunks = text_splitter.split_text(doc.page_content)
         
         # Create embeddings for each chunk
-        for i, chunk_text in enumerate(chunks):
-            embedding_vector = hf_embeddings.embed_query(chunk_text)
+        # for i, chunk_text in enumerate(chunks):
+        #     embedding_vector = hf_embeddings.embed_query(chunk_text)
             
             # Combine document metadata with common metadata
-            chunk_metadata = {
-                **doc.metadata,
-                **common_metadata,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-                "chunking_strategy": "kamradt"
-            }
+        chunk_metadata = {
+            **doc.metadata,
+            **common_metadata,
+            "chunk_index": i,
+            "total_chunks": len(chunks),
+            "chunking_strategy": "kamradt"
+        }
             
-            result.append({
-                "text": chunk_text,
-                "embedding": embedding_vector,
-                "metadata": chunk_metadata
-            })
+        result.append({
+            "chunks": chunks,
+            "metadata": chunk_metadata
+        })
     
     return result
 
@@ -392,13 +387,13 @@ def chunk_cluster_with_embeddings(
     docs = _load_document(url)
     
     # Initialize HuggingFace embeddings model
-    hf_embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    # hf_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
     
     # Create a wrapper embedding function compatible with ClusterSemanticChunker
-    def embedding_function(texts):
-        if isinstance(texts, str):
-            return hf_embeddings.embed_query(texts)
-        return [hf_embeddings.embed_query(text) for text in texts]
+    # def embedding_function(texts):
+    #     if isinstance(texts, str):
+    #         return hf_embeddings.embed_query(texts)
+    #     return [hf_embeddings.embed_query(text) for text in texts]
     
     # Define token counting function (using tiktoken for OpenAI-compatible tokenization)
     def token_counter(text):
@@ -407,7 +402,6 @@ def chunk_cluster_with_embeddings(
     
     # Initialize the ClusterSemanticChunker
     text_splitter = ClusterSemanticChunker(
-        embedding_function=embedding_function,
         max_chunk_size=max_chunk_size,
         length_function=token_counter
     )
@@ -419,24 +413,23 @@ def chunk_cluster_with_embeddings(
         chunks = text_splitter.split_text(doc.page_content)
         
         # Create embeddings for each chunk
-        for i, chunk_text in enumerate(chunks):
-            embedding_vector = hf_embeddings.embed_query(chunk_text)
+        # for i, chunk_text in enumerate(chunks):
+        #     embedding_vector = hf_embeddings.embed_query(chunk_text)
             
             # Combine document metadata with common metadata
-            chunk_metadata = {
-                **doc.metadata,
-                **common_metadata,
-                "chunk_index": i,
-                "total_chunks": len(chunks),
-                "chunking_strategy": "cluster"
-            }
+        chunk_metadata = {
+            **doc.metadata,
+            **common_metadata,
+            "chunk_index": i,
+            "total_chunks": len(chunks),
+            "chunking_strategy": "cluster"
+        }
             
-            result.append({
-                "text": chunk_text,
-                "embedding": embedding_vector,
-                "metadata": chunk_metadata
-            })
-    
+        result.append({
+            "chunks": chunks,
+            "metadata": chunk_metadata
+        })
+
     return result
 
 # Example usage for Airflow integration
