@@ -30,12 +30,17 @@ def load_chunks_into_chroma(
     
     # Initialize ChromaDB with the correct API
     persist_directory = "db"
-    
+    host = "159.223.100.38"
+    port = 8000  
     # Create the vector store using the collection name directly
+    client = chromadb.HttpClient(host=host, port=port)
+    print(f"Connected to remote ChromaDB at {host}:{port}")
+    
+    # Create the vector store using the collection name with the remote client
     vector_store = Chroma(
+        client=client,
         collection_name=collection_name,
-        embedding_function=embeddings, 
-        persist_directory=persist_directory
+        embedding_function=embeddings
     )
     
     # Convert chunks to Document objects

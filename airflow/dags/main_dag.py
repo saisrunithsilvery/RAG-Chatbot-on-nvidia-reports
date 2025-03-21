@@ -9,6 +9,7 @@ import tempfile
 from rag.chunking import chunk_document
 from vectordb.chromadb import load_chunks_into_chroma
 from vectordb.nonvector import load_chunks_into_faiss
+from vectordb.pinecone import load_chunks_into_pinecone
 
 # Define default arguments for the DAG
 default_args = {
@@ -128,6 +129,7 @@ def load_to_vector_db(**kwargs):
     try:
         # Choose vector database based on configuration
         if vectordb.lower() == "chromadb":
+            print(f"Loading chunks into ChromaDB collection: {collection_name}")
             collection = load_chunks_into_chroma(
                 tmp_path=tmp_file_path,
                 collection_name=collection_name,
@@ -139,6 +141,12 @@ def load_to_vector_db(**kwargs):
                 index_name=collection_name,
                 persist_directory="./faiss_index"
             )
+        elif vectordb.lower() == "pinecone":
+            print(f"Loading chunks into Pinecone collection: {collection_name}")
+            collection = load_chunks_into_pinecone(
+                tmp_path=tmp_file_path,
+                collection_name=collection_name
+            )    
         else:
             raise ValueError(f"Unsupported vector database: {vectordb}")
         
