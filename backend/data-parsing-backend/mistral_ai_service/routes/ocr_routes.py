@@ -19,7 +19,7 @@ class DocumentResponse(BaseModel):
     status: str
     markdown_url: str
 
-@router.post("/process", response_model=DocumentResponse)
+@router.post("/extract-pdf/mistral_ai", response_model=DocumentResponse)
 async def process_pdf_document(request: DocumentRequest):
     """
     Process a PDF document from an S3 URL and convert it to markdown

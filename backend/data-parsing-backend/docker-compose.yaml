@@ -48,3 +48,23 @@ services:
       - AWS_REGION=${AWS_REGION:-us-east-1}
       - AWS_S3_BUCKET=${AWS_S3_BUCKET}
     restart: unless-stopped
+
+  mistral_ai_service:
+    build:
+      context: ./mistral_ai_service
+      dockerfile: Dockerfile
+    ports:
+      - "8004:8004"
+    volumes:
+      - ./mistral_ai_service:/app
+    environment:
+      - ENVIRONMENT=development
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - AWS_S3_BUCKET=${AWS_S3_BUCKET}
+      - MISTRAL_API_KEY = ${MISTRAL_API_KEY}
+      - MISTRAL_OCR_MODEL = ${MISTRAL_OCR_MODEL}  
+      - TEMP_UPLOAD_DIR = ${TEMP_UPLOAD_DIR}
+      - MAX_FILE_SIZE_MB = ${MAX_FILE_SIZE_MB}
+    restart: unless-stopped

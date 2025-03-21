@@ -233,10 +233,10 @@ class PdfConverter:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             
             # Use enterprise folder prefix
-            process_folder = f"Enterprise_Extract_{timestamp}_{unique_id}"
+            process_folder = f"OpenSource_Extract_{timestamp}_{unique_id}"
             
             # Set the S3 path
-            base_s3_path = "enterprise-parsed"
+            base_s3_path = "opensource-parsed"
             s3_path = f"{base_s3_path}/{process_folder}"
 
             logger.info(f"Processing PDF: {pdf_path}")
