@@ -8,18 +8,12 @@ import requests
 import tempfile
 import json
 from datetime import datetime
-from chunking_evaluation.chunking import FixedTokenChunker, RecursiveTokenChunker, KamradtModifiedChunker, ClusterSemanticChunker, LLMSemanticChunker
 import tiktoken
-from chromadb.utils import embedding_functions
-from chunking_evaluation.utils import openai_token_count
 
 
 def chunk_document(
     url: str,
     chunking_strategy: str = "recursive"
-    # chunk_size: int = 300,
-    # chunk_overlap: int = 50,
-    # min_chunk_size: int = 50  # For Kamradt strategy
 ) -> List[Dict[str, Any]]:
     """
     Main function to chunk a document and generate embeddings using the specified strategy.
@@ -36,10 +30,10 @@ def chunk_document(
     Returns:
         List of dictionaries containing chunk text, embeddings, and metadata
     """
-
-    chunk_size = 300,
-    chunk_overlap = 50,
-    min_chunk_size = 50
+    print(f"This is my debug message: {url}")
+    chunk_size = 300
+    chunk_overlap = 50
+    min_chunk_size = 200
     model_name= "sentence-transformers/all-MiniLM-L6-v2"
     
     # Common metadata for all chunks
@@ -68,14 +62,14 @@ def chunk_document(
         result = chunk_recursively_with_embeddings(
             url, chunk_size, chunk_overlap, model_name, common_metadata
         )
-    elif chunking_strategy.lower() == "kamradt":
-        result = chunk_kamradt_with_embeddings(
-            url, chunk_size, min_chunk_size, model_name, common_metadata
-        )
-    elif chunking_strategy.lower() == "cluster":
-        result = chunk_cluster_with_embeddings(
-            url, chunk_size, model_name, common_metadata
-        )
+    # elif chunking_strategy.lower() == "kamradt":
+    #     result = chunk_kamradt_with_embeddings(
+    #         url, chunk_size, min_chunk_size, model_name, common_metadata
+    #     )
+    # elif chunking_strategy.lower() == "cluster":
+    #     result = chunk_cluster_with_embeddings(
+    #         url, chunk_size, model_name, common_metadata
+    # )
     else:
         raise ValueError(f"Unknown chunking strategy: {chunking_strategy}")
     
@@ -164,7 +158,7 @@ def chunk_by_character_with_embeddings(
         }
         
         result.append({
-            "chunks": chunks,
+            "chunks": chunk.page_content,
             "metadata": chunk_metadata
         })
     
@@ -224,7 +218,7 @@ def chunk_by_tokens_with_embeddings(
         }
         
         result.append({
-            "chunks": chunks,
+            "chunks": chunk.page_content,
             "metadata": chunk_metadata
         })
     
@@ -293,144 +287,144 @@ def chunk_recursively_with_embeddings(
     
     return result
 
-def chunk_kamradt_with_embeddings(
-    url: str,
-    chunk_size: int = 300,
-    min_chunk_size: int = 50,
-    model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-    common_metadata: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
-    """
-    Downloads a document from a URL or file path, chunks text using KamradtModifiedChunker,
-    and converts chunks to embeddings.
+# def chunk_kamradt_with_embeddings(
+#     url: str,
+#     chunk_size: int = 300,
+#     min_chunk_size: int = 50,
+#     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+#     common_metadata: Optional[Dict[str, Any]] = None
+# ) -> List[Dict[str, Any]]:
+#     """
+#     Downloads a document from a URL or file path, chunks text using KamradtModifiedChunker,
+#     and converts chunks to embeddings.
     
-    Args:
-        url: URL or file path of the document
-        chunk_size: Target size of each chunk in tokens
-        min_chunk_size: Minimum size of initial splits
-        model_name: Name of the embedding model to use
-        common_metadata: Common metadata to include with each chunk
+#     Args:
+#         url: URL or file path of the document
+#         chunk_size: Target size of each chunk in tokens
+#         min_chunk_size: Minimum size of initial splits
+#         model_name: Name of the embedding model to use
+#         common_metadata: Common metadata to include with each chunk
         
-    Returns:
-        List of dictionaries containing chunk text and embeddings
-    """
-    if common_metadata is None:
-        common_metadata = {}
+#     Returns:
+#         List of dictionaries containing chunk text and embeddings
+#     """
+#     if common_metadata is None:
+#         common_metadata = {}
     
-    # Load the document
-    docs = _load_document(url)
+#     # Load the document
+#     docs = _load_document(url)
     
-    # Initialize HuggingFace embeddings model
-    # hf_embeddings = HuggingFaceEmbeddings(model_name=model_name)
+#     # Initialize HuggingFace embeddings model
+#     # hf_embeddings = HuggingFaceEmbeddings(model_name=model_name)
     
-    # Create a wrapper embedding function compatible with KamradtModifiedChunker
-    # def embedding_function(texts):
-    #     if isinstance(texts, str):
-    #         return hf_embeddings.embed_query(texts)
-    #     return [hf_embeddings.embed_query(text) for text in texts]
+#     # Create a wrapper embedding function compatible with KamradtModifiedChunker
+#     # def embedding_function(texts):
+#     #     if isinstance(texts, str):
+#     #         return hf_embeddings.embed_query(texts)
+#     #     return [hf_embeddings.embed_query(text) for text in texts]
     
-    # Initialize the KamradtModifiedChunker
-    text_splitter = KamradtModifiedChunker(
-        avg_chunk_size=chunk_size,
-        min_chunk_size=min_chunk_size,
-    )
+#     # Initialize the KamradtModifiedChunker
+#     text_splitter = KamradtModifiedChunker(
+#         avg_chunk_size=chunk_size,
+#         min_chunk_size=min_chunk_size,
+#     )
     
-    # Process each document
-    result = []
-    for doc in docs:
-        # Split the document text
-        chunks = text_splitter.split_text(doc.page_content)
+#     # Process each document
+#     result = []
+#     for doc in docs:
+#         # Split the document text
+#         chunks = text_splitter.split_text(doc.page_content)
         
-        # Create embeddings for each chunk
-        # for i, chunk_text in enumerate(chunks):
-        #     embedding_vector = hf_embeddings.embed_query(chunk_text)
+#         # Create embeddings for each chunk
+#         # for i, chunk_text in enumerate(chunks):
+#         #     embedding_vector = hf_embeddings.embed_query(chunk_text)
             
-            # Combine document metadata with common metadata
-        chunk_metadata = {
-            **doc.metadata,
-            **common_metadata,
-            "chunk_index": i,
-            "total_chunks": len(chunks),
-            "chunking_strategy": "kamradt"
-        }
+#             # Combine document metadata with common metadata
+#         chunk_metadata = {
+#             **doc.metadata,
+#             **common_metadata,
+#             "chunk_index": i,
+#             "total_chunks": len(chunks),
+#             "chunking_strategy": "kamradt"
+#         }
             
-        result.append({
-            "chunks": chunks,
-            "metadata": chunk_metadata
-        })
+#         result.append({
+#             "chunks": chunks,
+#             "metadata": chunk_metadata
+#         })
     
-    return result
+#     return result
 
-def chunk_cluster_with_embeddings(
-    url: str,
-    max_chunk_size: int = 300,
-    model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-    common_metadata: Optional[Dict[str, Any]] = None
-) -> List[Dict[str, Any]]:
-    """
-    Downloads a document from a URL or file path, chunks text using ClusterSemanticChunker,
-    and converts chunks to embeddings.
+# def chunk_cluster_with_embeddings(
+#     url: str,
+#     max_chunk_size: int = 300,
+#     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+#     common_metadata: Optional[Dict[str, Any]] = None
+# ) -> List[Dict[str, Any]]:
+#     """
+#     Downloads a document from a URL or file path, chunks text using ClusterSemanticChunker,
+#     and converts chunks to embeddings.
     
-    Args:
-        url: URL or file path of the document
-        max_chunk_size: Maximum size of each chunk in tokens
-        model_name: Name of the embedding model to use
-        common_metadata: Common metadata to include with each chunk
+#     Args:
+#         url: URL or file path of the document
+#         max_chunk_size: Maximum size of each chunk in tokens
+#         model_name: Name of the embedding model to use
+#         common_metadata: Common metadata to include with each chunk
         
-    Returns:
-        List of dictionaries containing chunk text and embeddings
-    """
-    if common_metadata is None:
-        common_metadata = {}
+#     Returns:
+#         List of dictionaries containing chunk text and embeddings
+#     """
+#     if common_metadata is None:
+#         common_metadata = {}
     
-    # Load the document
-    docs = _load_document(url)
+#     # Load the document
+#     docs = _load_document(url)
     
-    # Initialize HuggingFace embeddings model
-    # hf_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+#     # Initialize HuggingFace embeddings model
+#     # hf_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
     
-    # Create a wrapper embedding function compatible with ClusterSemanticChunker
-    # def embedding_function(texts):
-    #     if isinstance(texts, str):
-    #         return hf_embeddings.embed_query(texts)
-    #     return [hf_embeddings.embed_query(text) for text in texts]
+#     # Create a wrapper embedding function compatible with ClusterSemanticChunker
+#     # def embedding_function(texts):
+#     #     if isinstance(texts, str):
+#     #         return hf_embeddings.embed_query(texts)
+#     #     return [hf_embeddings.embed_query(text) for text in texts]
     
-    # Define token counting function (using tiktoken for OpenAI-compatible tokenization)
-    def token_counter(text):
-        encoding = tiktoken.get_encoding("cl100k_base")
-        return len(encoding.encode(text))
+#     # Define token counting function (using tiktoken for OpenAI-compatible tokenization)
+#     def token_counter(text):
+#         encoding = tiktoken.get_encoding("cl100k_base")
+#         return len(encoding.encode(text))
     
-    # Initialize the ClusterSemanticChunker
-    text_splitter = ClusterSemanticChunker(
-        max_chunk_size=max_chunk_size,
-        length_function=token_counter
-    )
+#     # Initialize the ClusterSemanticChunker
+#     text_splitter = ClusterSemanticChunker(
+#         max_chunk_size=max_chunk_size,
+#         length_function=token_counter
+#     )
     
-    # Process each document
-    result = []
-    for doc in docs:
-        # Split the document text
-        chunks = text_splitter.split_text(doc.page_content)
+#     # Process each document
+#     result = []
+#     for doc in docs:
+#         # Split the document text
+#         chunks = text_splitter.split_text(doc.page_content)
         
-        # Create embeddings for each chunk
-        # for i, chunk_text in enumerate(chunks):
-        #     embedding_vector = hf_embeddings.embed_query(chunk_text)
+#         # Create embeddings for each chunk
+#         # for i, chunk_text in enumerate(chunks):
+#         #     embedding_vector = hf_embeddings.embed_query(chunk_text)
             
-            # Combine document metadata with common metadata
-        chunk_metadata = {
-            **doc.metadata,
-            **common_metadata,
-            "chunk_index": i,
-            "total_chunks": len(chunks),
-            "chunking_strategy": "cluster"
-        }
+#             # Combine document metadata with common metadata
+#         chunk_metadata = {
+#             **doc.metadata,
+#             **common_metadata,
+#             "chunk_index": i,
+#             "total_chunks": len(chunks),
+#             "chunking_strategy": "cluster"
+#         }
             
-        result.append({
-            "chunks": chunks,
-            "metadata": chunk_metadata
-        })
+#         result.append({
+#             "chunks": chunks,
+#             "metadata": chunk_metadata
+#         })
 
-    return result
+#     return result
 
 # Example usage for Airflow integration
 def airflow_chunk_document(**kwargs):

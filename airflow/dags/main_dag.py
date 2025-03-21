@@ -7,7 +7,7 @@ import sys
 sys.path.append('/opt/airflow')
 import tempfile
 from rag.chunking import chunk_document, airflow_chunk_document
-from rag.vector_db import load_chunks_into_chroma
+from vectordb.chromadb import load_chunks_into_chroma
 
 # Define default arguments for the DAG
 default_args = {
@@ -43,11 +43,7 @@ def process_document(**kwargs):
     s3_bucket = conf.get('s3_bucket')
     s3_key = conf.get('s3_key')
     chunking_strategy = conf.get('chunking_strategy', 'recursive')
-    chunk_size = int(conf.get('chunk_size', 1000))
-    chunk_overlap = int(conf.get('chunk_overlap', 200))
-    model_name = conf.get('model_name', 'sentence-transformers/all-MiniLM-L6-v2')
-    min_chunk_size = int(conf.get('min_chunk_size', 50))
-    quarter = conf.get('quarter', datetime.now().strftime('%Y-Q%q'))
+    vectordb = conf.get('vectordb','chromadb')
     
     # Get collection name for ChromaDB
     collection_name = conf.get('collection_name', f"collection_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
@@ -59,6 +55,8 @@ def process_document(**kwargs):
     # Create a temporary directory to store the downloaded file
     temp_dir = tempfile.mkdtemp()
     local_filename = os.path.basename(s3_key)
+    print(f"This is my debug message: {local_filename}")
+    print(f"This is my debug message: {temp_dir}")
     local_file_path = os.path.join(temp_dir, local_filename)
     
     # Connect to S3 using boto3
@@ -73,14 +71,10 @@ def process_document(**kwargs):
         # Push parameters to XCom for the chunking task
         ti.xcom_push(key='file_path', value=local_file_path)
         ti.xcom_push(key='chunk_strategy', value=chunking_strategy)
-        ti.xcom_push(key='chunk_size', value=chunk_size)
-        ti.xcom_push(key='chunk_overlap', value=chunk_overlap)
-        ti.xcom_push(key='model_name', value=model_name)
-        ti.xcom_push(key='quarter', value=quarter)
-        ti.xcom_push(key='min_chunk_size', value=min_chunk_size)
-        ti.xcom_push(key='collection_name', value=collection_name)
+        ti.xcom_push(key='collection_name', value="nvidia_collection")
         ti.xcom_push(key='chroma_persist_dir', value=conf.get('chroma_persist_dir', './chroma_db'))
-        
+        ti.xcom_push(key='vectordb', value=vectordb)
+        ti.xcom_push(key='s3_key', value=s3_key)
         return local_file_path
         
     except Exception as e:
@@ -94,55 +88,48 @@ def airflow_chunk_document(**kwargs):
     """Function to be used in Airflow DAG"""
     ti = kwargs['ti']
     
-    # Get parameters from previous task
-    file_path = ti.xcom_pull(task_ids='process_request', key='file_path')
-    chunk_strategy = ti.xcom_pull(task_ids='process_request', key='chunk_strategy')
-    chunk_size = ti.xcom_pull(task_ids='process_request', key='chunk_size')
-    chunk_overlap = ti.xcom_pull(task_ids='process_request', key='chunk_overlap')
-    quarter = ti.xcom_pull(task_ids='process_request', key='quarter')
-    min_chunk_size = ti.xcom_pull(task_ids='process_request', key='min_chunk_size', default=50)
+    # Get parameters from previous task - FIXED TASK ID
+    file_path = ti.xcom_pull(task_ids='process_document_task', key='file_path')
+    print(f"This is my debug message: {file_path}")
+    chunk_strategy = ti.xcom_pull(task_ids='process_document_task', key='chunk_strategy')
     
     # Ensure default values if not provided
     if not chunk_strategy:
         chunk_strategy = "recursive"
-    if not chunk_size:
-        chunk_size = 1000
-    if not chunk_overlap:
-        chunk_overlap = 200
+    
+    # These variables aren't defined in the original process_document function
+    # So we should set default values here
+    chunk_size = 1000
+    chunk_overlap = 200
     
     # Create document metadata
     metadata = {
-        "quarter": quarter,
         "processing_date": datetime.now().strftime("%Y-%m-%d")
     }
     
-    # Generate embeddings
-    embeddings, tmp_file = chunk_document(
-        file_path,
-        chunking_strategy=chunk_strategy,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        document_metadata=metadata,
-        min_chunk_size=min_chunk_size
-    )
+    # Generate chunks
+    print(f"Chunking document: {file_path}")
+    chunks, tmp_file = chunk_document(
+            url=file_path,  # This is the url parameter
+            chunking_strategy=chunk_strategy
+        )
     
     # Push embeddings to XCom for next task
-    ti.xcom_push(key='embeddings', value=embeddings)
+    ti.xcom_push(key='chunks', value=chunks)
     
     # Return the path to the temporary file for next task
-    return tmp_file    
-
+    return tmp_file
 def load_to_vector_db(**kwargs):
     """
     Function to load chunked documents into ChromaDB
     """
     ti = kwargs['ti']
     
-    # Get data from previous task
+    # Get data from previous task - FIXED TASK IDs
     tmp_file_path = ti.xcom_pull(task_ids='chunk_document_task')
-    collection_name = ti.xcom_pull(task_ids='process_document_task', key='collection_name')
+    collection_name = "nvidia_collection"
     chroma_persist_dir = ti.xcom_pull(task_ids='process_document_task', key='chroma_persist_dir')
-    
+    vectordb = ti.xcom_pull(task_ids='process_document_task', key='vectordb')
     if not tmp_file_path:
         raise ValueError("No temporary file path found from previous task")
     
@@ -152,7 +139,6 @@ def load_to_vector_db(**kwargs):
             tmp_path=tmp_file_path,
             collection_name=collection_name,
             persist_directory=chroma_persist_dir,
-            embedding_function_name="none"  # Use pre-computed embeddings
         )
         
         # Push collection info to XCom
