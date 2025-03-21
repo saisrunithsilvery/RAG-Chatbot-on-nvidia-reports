@@ -6,8 +6,9 @@ import os
 import sys
 sys.path.append('/opt/airflow')
 import tempfile
-from rag.chunking import chunk_document, airflow_chunk_document
+from rag.chunking import chunk_document
 from vectordb.chromadb import load_chunks_into_chroma
+from vectordb.nonvector import load_chunks_into_faiss
 
 # Define default arguments for the DAG
 default_args = {
@@ -97,25 +98,16 @@ def airflow_chunk_document(**kwargs):
     if not chunk_strategy:
         chunk_strategy = "recursive"
     
-    # These variables aren't defined in the original process_document function
-    # So we should set default values here
-    chunk_size = 1000
-    chunk_overlap = 200
-    
-    # Create document metadata
-    metadata = {
-        "processing_date": datetime.now().strftime("%Y-%m-%d")
-    }
-    
     # Generate chunks
     print(f"Chunking document: {file_path}")
     chunks, tmp_file = chunk_document(
-            url=file_path,  # This is the url parameter
+            url=file_path,
             chunking_strategy=chunk_strategy
         )
     
-    # Push embeddings to XCom for next task
-    ti.xcom_push(key='chunks', value=chunks)
+    # Push chunks to XCom for next task (optional, but could be useful)
+    # Note: XCom might have size limitations for large chunk sets
+    # ti.xcom_push(key='chunks', value=chunks)
     
     # Return the path to the temporary file for next task
     return tmp_file
@@ -134,21 +126,31 @@ def load_to_vector_db(**kwargs):
         raise ValueError("No temporary file path found from previous task")
     
     try:
-        # Load chunks into ChromaDB
-        collection = load_chunks_into_chroma(
-            tmp_path=tmp_file_path,
-            collection_name=collection_name,
-            persist_directory=chroma_persist_dir,
-        )
+        # Choose vector database based on configuration
+        if vectordb.lower() == "chromadb":
+            collection = load_chunks_into_chroma(
+                tmp_path=tmp_file_path,
+                collection_name=collection_name,
+                persist_directory=chroma_persist_dir,
+            )
+        elif vectordb.lower() == "faiss":
+            collection = load_chunks_into_faiss(
+                tmp_path=tmp_file_path,
+                index_name=collection_name,
+                persist_directory="./faiss_index"
+            )
+        else:
+            raise ValueError(f"Unsupported vector database: {vectordb}")
         
         # Push collection info to XCom
         ti.xcom_push(key='collection_loaded', value=True)
         ti.xcom_push(key='collection_name', value=collection_name)
+        ti.xcom_push(key='vectordb_used', value=vectordb.lower())
         
         return collection_name
     
     except Exception as e:
-        print(f"Error loading chunks into ChromaDB: {str(e)}")
+        print(f"Error loading chunks into DB: {str(e)}")
         raise e
 
 def cleanup_temp_files(**kwargs):

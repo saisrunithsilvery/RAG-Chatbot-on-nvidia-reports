@@ -62,14 +62,6 @@ def chunk_document(
         result = chunk_recursively_with_embeddings(
             url, chunk_size, chunk_overlap, model_name, common_metadata
         )
-    # elif chunking_strategy.lower() == "kamradt":
-    #     result = chunk_kamradt_with_embeddings(
-    #         url, chunk_size, min_chunk_size, model_name, common_metadata
-    #     )
-    # elif chunking_strategy.lower() == "cluster":
-    #     result = chunk_cluster_with_embeddings(
-    #         url, chunk_size, model_name, common_metadata
-    # )
     else:
         raise ValueError(f"Unknown chunking strategy: {chunking_strategy}")
     
@@ -158,6 +150,8 @@ def chunk_by_character_with_embeddings(
         }
         
         result.append({
+            **chunk.metadata,
+            **common_metadata,
             "chunks": chunk.page_content,
             "metadata": chunk_metadata
         })
@@ -202,7 +196,7 @@ def chunk_by_tokens_with_embeddings(
     chunks = text_splitter.split_documents(docs)
     
     # Initialize the embeddings model
-    embeddings = HuggingFaceEmbeddings(model_name=model_name)
+    # embeddings = HuggingFaceEmbeddings(model_name=model_name)
     
     # Create embeddings for each chunk
     result = []
@@ -234,16 +228,6 @@ def chunk_recursively_with_embeddings(
     """
     Downloads a document from a URL or file path, chunks text using RecursiveCharacterTextSplitter,
     and converts chunks to embeddings.
-    
-    Args:
-        url: URL or file path of the document
-        chunk_size: Maximum size of each chunk
-        chunk_overlap: Overlap between chunks
-        model_name: Name of the embedding model to use
-        common_metadata: Common metadata to include with each chunk
-        
-    Returns:
-        List of dictionaries containing chunk text and embeddings
     """
     if common_metadata is None:
         common_metadata = {}
@@ -262,15 +246,10 @@ def chunk_recursively_with_embeddings(
     # Split the documents
     chunks = text_splitter.split_documents(docs)
     
-    # Initialize the embeddings model
-    embeddings = HuggingFaceEmbeddings(model_name=model_name)
-    
-    # Create embeddings for each chunk
+    # Create results for each chunk
     result = []
     for i, chunk in enumerate(chunks):
-        embedding_vector = embeddings.embed_query(chunk.page_content)
-        
-        # Combine document metadata with common metadata
+        # Create a metadata dictionary for this chunk
         chunk_metadata = {
             **chunk.metadata,
             **common_metadata,
@@ -278,12 +257,15 @@ def chunk_recursively_with_embeddings(
             "total_chunks": len(chunks)
         }
         
+        # Add this chunk to the result list with the correct structure
         result.append({
             "text": chunk.page_content,
-            "embedding": embedding_vector,
             "metadata": chunk_metadata
         })
-        print(result)
+        
+        # Print progress message (optional)
+        if i % 10 == 0 or i == len(chunks) - 1:
+            print(f"Processed chunk {i+1}/{len(chunks)}")
     
     return result
 
@@ -427,44 +409,44 @@ def chunk_recursively_with_embeddings(
 #     return result
 
 # Example usage for Airflow integration
-def airflow_chunk_document(**kwargs):
-    """Function to be used in Airflow DAG"""
-    ti = kwargs['ti']
+# def airflow_chunk_document(**kwargs):
+    # """Function to be used in Airflow DAG"""
+    # ti = kwargs['ti']
     
-    # Get parameters from previous task
-    file_path = ti.xcom_pull(task_ids='process_request', key='file_path')
-    chunk_strategy = ti.xcom_pull(task_ids='process_request', key='chunk_strategy')
-    chunk_size = ti.xcom_pull(task_ids='process_request', key='chunk_size')
-    chunk_overlap = ti.xcom_pull(task_ids='process_request', key='chunk_overlap')
-    quarter = ti.xcom_pull(task_ids='process_request', key='quarter')
-    min_chunk_size = ti.xcom_pull(task_ids='process_request', key='min_chunk_size', default=50)
+    # # Get parameters from previous task
+    # file_path = ti.xcom_pull(task_ids='process_request', key='file_path')
+    # chunk_strategy = ti.xcom_pull(task_ids='process_request', key='chunk_strategy')
+    # chunk_size = ti.xcom_pull(task_ids='process_request', key='chunk_size')
+    # chunk_overlap = ti.xcom_pull(task_ids='process_request', key='chunk_overlap')
+    # quarter = ti.xcom_pull(task_ids='process_request', key='quarter')
+    # min_chunk_size = ti.xcom_pull(task_ids='process_request', key='min_chunk_size', default=50)
     
-    # Ensure default values if not provided
-    if not chunk_strategy:
-        chunk_strategy = "recursive"
-    if not chunk_size:
-        chunk_size = 1000
-    if not chunk_overlap:
-        chunk_overlap = 200
+    # # Ensure default values if not provided
+    # if not chunk_strategy:
+    #     chunk_strategy = "recursive"
+    # if not chunk_size:
+    #     chunk_size = 1000
+    # if not chunk_overlap:
+    #     chunk_overlap = 200
     
-    # Create document metadata
-    metadata = {
-        "quarter": quarter,
-        "processing_date": datetime.now().strftime("%Y-%m-%d")
-    }
+    # # Create document metadata
+    # metadata = {
+    #     "quarter": quarter,
+    #     "processing_date": datetime.now().strftime("%Y-%m-%d")
+    # }
     
-    # Generate embeddings
-    embeddings, tmp_file = chunk_document(
-        file_path,
-        chunking_strategy=chunk_strategy,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        document_metadata=metadata,
-        min_chunk_size=min_chunk_size
-    )
+    # # Generate embeddings
+    # embeddings, tmp_file = chunk_document(
+    #     file_path,
+    #     chunking_strategy=chunk_strategy,
+    #     chunk_size=chunk_size,
+    #     chunk_overlap=chunk_overlap,
+    #     document_metadata=metadata,
+    #     min_chunk_size=min_chunk_size
+    # )
     
     # Push embeddings to XCom for next task
-    ti.xcom_push(key='embeddings', value=embeddings)
+    # ti.xcom_push(key='embeddings', value=embeddings)
     
-    # Return the path to the temporary file for next task
-    return tmp_file
+    # # Return the path to the temporary file for next task
+    # return tmp_file
