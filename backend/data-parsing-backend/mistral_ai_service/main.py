@@ -30,7 +30,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(ocr_router, prefix="/api/v1")
+app.include_router(ocr_router)
 
 # Root endpoint
 @app.get("/")
