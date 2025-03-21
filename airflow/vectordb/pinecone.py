@@ -1,255 +1,139 @@
+# Import the Pinecone library
 import json
 import os
-from pinecone import Pinecone, ServerlessSpec
-from typing import Optional, List, Dict, Any, Union
-from datetime import datetime
+import time
+from pinecone import Pinecone
+from typing import Optional, List, Dict, Any
+from langchain.embeddings import HuggingFaceEmbeddings
 
+# Initialize a Pinecone client with 
 def load_chunks_into_pinecone(
-    tmp_path: str,
-    index_name: str,
-    namespace: Optional[str] = None,
-    api_key: Optional[str] = None,
-    environment: str = "gcp-starter",
-    dimension: int = 384,  # Default for all-MiniLM-L6-v2
-    metric: str = "cosine",
-    serverless: bool = False,
-    cloud: Optional[str] = None,
-    region: Optional[str] = None,
-    batch_size: int = 100
-) -> str:
-    """
-    Load chunked documents from a JSON file into Pinecone.
+    tmp_path: str, 
+    collection_name: str
+):
     
-    Args:
-        tmp_path: Path to the JSON file containing chunks
-        index_name: Name for the Pinecone index
-        namespace: Optional namespace within the index
-        api_key: Pinecone API key (defaults to PINECONE_API_KEY env variable)
-        environment: Pinecone environment
-        dimension: Dimension of the embedding vectors
-        metric: Distance metric to use (cosine, dotproduct, or euclidean)
-        serverless: Whether to use serverless deployment
-        cloud: Cloud provider for serverless (aws or gcp)
-        region: Region for serverless deployment
-        batch_size: Number of vectors to upsert in each batch
-        
-    Returns:
-        The name of the Pinecone index
-    """
+    
+    # Sanitize collection name to conform to Pinecone naming rules
+    sanitized_index_name = collection_name.replace('_', '-').lower()
+    print(f"Original collection name: {collection_name}, sanitized: {sanitized_index_name}")
+    
     # Load chunks from JSON file
     with open(tmp_path, 'r') as f:
         chunks = json.load(f)
+        print(f"Type of result: {type(chunks)}")
+        print(f"Structure of result: {chunks[:1] if isinstance(chunks, list) else list(chunks.keys())}")
     
-    # Check if we have any chunks to process
-    if not chunks:
-        raise ValueError("No chunks found in the provided file")
+    # Initialize Pinecone client with API key from environment variable
+    pine_cone = os.getenv("PINECONE_API_KEY")
+    if not pine_cone:
+        raise ValueError("PINECONE_API_KEY environment variable not set")
+    pc = Pinecone(api_key=pine_cone)
     
-    # Determine the embedding dimension from the first chunk
-    if "embedding" in chunks[0]:
-        dimension = len(chunks[0]["embedding"])
-        print(f"Using embedding dimension from chunks: {dimension}")
+    # Force delete the existing index if it exists
+    try:
+        if pc.has_index(sanitized_index_name):
+            print(f"Deleting existing index: {sanitized_index_name}")
+            pc.delete_index(sanitized_index_name)
+            time.sleep(20)  # Wait longer for deletion to complete
+    except Exception as e:
+        print(f"Error during index deletion: {str(e)}")
+        # Continue anyway - we'll try to create a new index
     
-    # Get API key from environment if not provided
-    if api_key is None:
-        api_key = os.environ.get("PINECONE_API_KEY")
-        if not api_key:
-            raise ValueError("Pinecone API key not found. Please provide api_key or set PINECONE_API_KEY environment variable.")
+    # Define our embedding model and dimension
+    embedding_model = "sentence-transformers/all-MiniLM-L6-v2"  # 384 dimensions
+    dimension = 384
     
-    # Initialize Pinecone client
-    pc = Pinecone(api_key=api_key)
-    
-    # Check if index already exists
-    existing_indexes = [index.name for index in pc.list_indexes()]
-    
-    if index_name not in existing_indexes:
-        print(f"Creating new Pinecone index: {index_name}")
+    # Create a new index with the 'spec' parameter
+    try:
+        print(f"Creating new index: {sanitized_index_name} with dimension: {dimension}")
         
-        # Prepare index creation specs
-        if serverless:
-            if not cloud or not region:
-                raise ValueError("Cloud provider and region must be specified for serverless deployment")
-            
-            spec = ServerlessSpec(
-                cloud=cloud,
-                region=region
-            )
-            
-            # Create the index with serverless spec
-            pc.create_index(
-                name=index_name,
-                dimension=dimension,
-                metric=metric,
-                spec=spec
-            )
-        else:
-            # Create the index with standard spec (pod-based)
-            pc.create_index(
-                name=index_name,
-                dimension=dimension,
-                metric=metric
-            )
-        
-        print(f"Waiting for index {index_name} to be ready...")
-        # No need to wait explicitly, Pinecone V2 handles this automatically
-    else:
-        print(f"Using existing Pinecone index: {index_name}")
-    
-    # Connect to the index
-    index = pc.Index(index_name)
-    
-    # Prepare vectors for upserting
-    vectors_to_upsert = []
-    
-    for i, chunk in enumerate(chunks):
-        # Generate a unique ID for each chunk
-        chunk_id = f"{index_name}_{datetime.now().strftime('%Y%m%d')}_{i}"
-        
-        # Extract the embedding
-        embedding = chunk["embedding"]
-        
-        # Prepare metadata (exclude the embedding to avoid duplication)
-        metadata = {
-            "text": chunk["text"],
-            **chunk["metadata"]
+        # Define the spec directly - this version should work with your Pinecone client
+        spec = {
+            "serverless": {
+                "cloud": "aws",
+                "region": "us-east-1"
+            }
         }
         
-        # Add to vectors list
-        vectors_to_upsert.append({
-            "id": chunk_id,
-            "values": embedding,
-            "metadata": metadata
-        })
-    
-    # Upsert in batches
-    total_vectors = len(vectors_to_upsert)
-    batches = [vectors_to_upsert[i:i + batch_size] for i in range(0, total_vectors, batch_size)]
-    
-    print(f"Upserting {total_vectors} vectors to Pinecone index '{index_name}' in {len(batches)} batches")
-    
-    for i, batch in enumerate(batches):
-        if namespace:
-            index.upsert(vectors=batch, namespace=namespace)
-        else:
-            index.upsert(vectors=batch)
-        print(f"Batch {i+1}/{len(batches)} upserted")
-    
-    print(f"Successfully added {total_vectors} chunks to Pinecone index '{index_name}'")
-    if namespace:
-        print(f"Namespace: {namespace}")
-    
-    return index_name
-
-# Example query function
-def query_pinecone(
-    index_name: str,
-    query_text: str,
-    embedding_function,
-    top_k: int = 3,
-    namespace: Optional[str] = None,
-    api_key: Optional[str] = None
-):
-    """
-    Query a Pinecone index with a text string.
-    
-    Args:
-        index_name: Name of the Pinecone index
-        query_text: Text to search for
-        embedding_function: Function to convert text to an embedding vector
-        top_k: Number of results to return
-        namespace: Optional namespace to query within
-        api_key: Pinecone API key (defaults to PINECONE_API_KEY env variable)
+        pc.create_index(
+            name=sanitized_index_name,
+            dimension=dimension,
+            metric="cosine",
+            spec=spec
+        )
+        time.sleep(20)  # Wait for creation to complete
+    except Exception as e:
+        print(f"Error creating index: {str(e)}")
         
-    Returns:
-        Query results from Pinecone
-    """
-    # Get API key from environment if not provided
-    if api_key is None:
-        api_key = os.environ.get("PINECONE_API_KEY")
-        if not api_key:
-            raise ValueError("Pinecone API key not found. Please provide api_key or set PINECONE_API_KEY environment variable.")
-    
-    # Initialize Pinecone client
-    pc = Pinecone(api_key=api_key)
+        # Let's try an alternative approach if the first one fails
+        try:
+            print("Trying alternative index creation approach...")
+            # Older style spec format
+            pc.create_index(
+                name=sanitized_index_name,
+                dimension=dimension,
+                metric="cosine",
+                spec={"pod_type": "p1.x1"}  # An alternative spec format
+            )
+            time.sleep(20)
+        except Exception as e2:
+            print(f"Alternative approach also failed: {str(e2)}")
+            raise e2
     
     # Connect to the index
-    index = pc.Index(index_name)
+    index = pc.Index(sanitized_index_name)
     
-    # Generate embedding for the query text
-    query_embedding = embedding_function(query_text)
-    
-    # Query the index
-    if namespace:
-        results = index.query(
-            vector=query_embedding,
-            top_k=top_k,
-            namespace=namespace,
-            include_metadata=True
-        )
-    else:
-        results = index.query(
-            vector=query_embedding,
-            top_k=top_k,
-            include_metadata=True
-        )
-    
-    return results
-
-# Example usage
-def example_pinecone_usage():
-    # Create a simple embedding function (for demonstration)
-    # In practice, you would use your HuggingFace embeddings or another model
+    # Initialize embedding model
     from langchain.embeddings import HuggingFaceEmbeddings
-    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(model_name=embedding_model)
     
-    # Load chunks into Pinecone
-    index_name = load_chunks_into_pinecone(
-        tmp_path="/path/to/your/tmp_file.json",
-        index_name="document-chunks",
-        namespace="my-docs",
-        # Serverless-specific parameters (if using serverless)
-        serverless=True,
-        cloud="aws",
-        region="us-west-2"
-    )
+    # Prepare vectors for upsert
+    vectors_to_upsert = []
     
-    # Example query
-    query_text = "What is semantic chunking?"
-    results = query_pinecone(
-        index_name=index_name,
-        query_text=query_text,
-        embedding_function=lambda text: embeddings.embed_query(text),
-        top_k=3,
-        namespace="my-docs"
-    )
+    if isinstance(chunks, list):
+        for i, chunk in enumerate(chunks):
+            # Define the text field consistently
+            text_field = chunk.get("chunk_text") or chunk.get("text", "")
+            
+            # Generate embedding
+            embedding = embeddings.embed_query(text_field)
+            
+            vectors_to_upsert.append({
+                "id": str(chunk.get("id", f"chunk_{i}")),
+                "values": embedding,
+                "metadata": {
+                    "text": text_field,
+                    **{k: v for k, v in chunk.items() if k not in ["embedding", "text", "chunk_text"]}
+                }
+            })
+    else:  # If chunks is a dictionary
+        for chunk_id, chunk_data in chunks.items():
+            # Define the text field consistently
+            text_field = chunk_data.get("chunk_text") or chunk_data.get("text", "")
+            
+            # Generate embedding
+            embedding = embeddings.embed_query(text_field)
+            
+            vectors_to_upsert.append({
+                "id": str(chunk_id),
+                "values": embedding,
+                "metadata": {
+                    "text": text_field,
+                    **{k: v for k, v in chunk_data.items() if k not in ["embedding", "text", "chunk_text"]}
+                }
+            })
     
-    print("\nQuery:", query_text)
-    print("\nResults:")
-    for i, match in enumerate(results["matches"]):
-        print(f"\nResult {i+1} (Score: {match['score']:.4f}):")
-        print(f"Metadata: {match['metadata']}")
-        text = match['metadata']['text']
-        print(f"Content: {text[:150]}...")  # Show first 150 chars
+    # Upsert in batches
+    batch_size = 100
+    total_batches = (len(vectors_to_upsert) + batch_size - 1) // batch_size
+    for i in range(0, len(vectors_to_upsert), batch_size):
+        batch = vectors_to_upsert[i:i+batch_size]
+        try:
+            index.upsert(vectors=batch)
+            print(f"Upserted batch {i//batch_size + 1}/{total_batches}")
+        except Exception as e:
+            print(f"Error upserting batch {i//batch_size + 1}: {str(e)}")
+            # Continue with the next batch
     
-    return results
-
-# Integration with Airflow
-def airflow_load_to_pinecone(**kwargs):
-    """Function to be used in Airflow DAG"""
-    ti = kwargs['ti']
-    
-    # Get the temporary file path from the previous task
-    tmp_file = ti.xcom_pull(task_ids='chunk_document_task')
-    
-    # Get other parameters
-    index_name = ti.xcom_pull(task_ids='process_request', key='pinecone_index', default="document-chunks")
-    namespace = ti.xcom_pull(task_ids='process_request', key='pinecone_namespace', default=None)
-    
-    # Load chunks into Pinecone
-    index_name = load_chunks_into_pinecone(
-        tmp_path=tmp_file,
-        index_name=index_name,
-        namespace=namespace
-    )
-    
-    # Return index name for next task
-    return index_name
+    print(f"Successfully loaded vectors into Pinecone index '{sanitized_index_name}'")
+    return sanitized_index_name
