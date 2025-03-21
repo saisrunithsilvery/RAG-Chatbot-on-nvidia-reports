@@ -1,102 +1,146 @@
-import os
 import json
-import logging
-import uuid
-from typing import List, Dict, Any
 import chromadb
 from chromadb.config import Settings
+from chromadb.utils import embedding_functions
+from typing import Optional, List, Dict, Any
 
-logger = logging.getLogger(__name__)
-
-def store_in_chroma(embeddings: List[Dict[str, Any]], 
-                   chunked_file_path: str, 
-                   quarter: str) -> str:
+def load_chunks_into_chroma(
+    tmp_path: str, 
+    collection_name: str,
+    persist_directory: Optional[str] = "./chroma_db",
+) -> chromadb.Collection:
     """
-    Store document embeddings in Chroma vector database.
+    Load chunked documents from a JSON file into ChromaDB.
     
     Args:
-        embeddings (List[Dict]): List of embedding dictionaries containing 'text', 'embedding', and 'metadata'
-        chunked_file_path (str): Path to the chunked document file
-        quarter (str): Quarter information for the document (e.g., 'Q1_2023')
-    
+        tmp_path: Path to the JSON file containing chunks
+        collection_name: Name for the ChromaDB collection
+        persist_directory: Directory to store the ChromaDB data
+        embedding_function_name: Type of embedding function to use ('huggingface', 'openai', or 'none')
+        model_name: Name of the embedding model (for HuggingFace)
+        
     Returns:
-        str: Name of the Chroma collection where embeddings were stored
+        The ChromaDB collection object
     """
+    embedding_function_name = "huggingface",
+    model_name = "sentence-transformers/all-MiniLM-L6-v2"
+    # Load chunks from JSON file
+    with open(tmp_path, 'r') as f:
+        chunks = json.load(f)
+    
+    # Initialize ChromaDB client
+    chroma_client = chromadb.PersistentClient(
+        path=persist_directory,
+        settings=Settings(anonymized_telemetry=False)
+    )
+    
+    # Set up the embedding function
+    if embedding_function_name.lower() == "huggingface":
+        ef = embedding_functions.HuggingFaceEmbeddingFunction(
+            model_name=model_name
+        )
+
+    elif embedding_function_name.lower() == "none":
+        # Use pre-computed embeddings from chunks
+        ef = None
+    else:
+        raise ValueError(f"Unknown embedding function type: {embedding_function_name}")
+    
+    # Create or get collection
     try:
-        # Initialize Chroma client
-        chroma_host = os.environ.get("CHROMA_HOST", "localhost")
-        chroma_port = os.environ.get("CHROMA_PORT", "8000")
-        persistent_dir = os.environ.get("CHROMA_PERSISTENT_DIR", "./chroma_data")
+        # Try to get existing collection
+        collection = chroma_client.get_collection(name=collection_name, embedding_function=ef)
+        print(f"Using existing collection: {collection_name}")
+    except ValueError:
+        # Create new collection if it doesn't exist
+        collection = chroma_client.create_collection(name=collection_name, embedding_function=ef)
+        print(f"Created new collection: {collection_name}")
+    
+    # Prepare data for batch addition
+    ids = []
+    documents = []
+    metadatas = []
+    embeddings = []
+    
+    for i, chunk in enumerate(chunks):
+        # Generate a unique ID for each chunk
+        chunk_id = f"{collection_name}_{i}"
+        ids.append(chunk_id)
         
-        # Determine if we should use HTTP client or persistent client
-        if os.environ.get("CHROMA_USE_HTTP", "false").lower() == "true":
-            client = chromadb.HttpClient(
-                host=chroma_host,
-                port=chroma_port
-            )
-            logger.info(f"Connected to Chroma HTTP server at {chroma_host}:{chroma_port}")
-        else:
-            client = chromadb.PersistentClient(
-                path=persistent_dir
-            )
-            logger.info(f"Using persistent Chroma client at {persistent_dir}")
+        # Add document text
+        documents.append(chunk["text"])
         
-        # Define collection name using quarter information
-        collection_name = f"financial_docs_{quarter.lower()}"
+        # Add metadata
+        metadatas.append(chunk["metadata"])
         
-        # Check if collection exists, if not create it
-        try:
-            collection = client.get_collection(name=collection_name)
-            logger.info(f"Using existing Chroma collection: {collection_name}")
-        except Exception:
-            collection = client.create_collection(
-                name=collection_name,
-                metadata={"quarter": quarter}
-            )
-            logger.info(f"Created new Chroma collection: {collection_name}")
-        
-        # Prepare data for insertion
-        ids = [str(uuid.uuid4()) for _ in range(len(embeddings))]
-        documents = [item["text"] for item in embeddings]
-        embedding_vectors = [item["embedding"] for item in embeddings]
-        
-        # Prepare metadata
-        metadatas = []
-        for item in embeddings:
-            metadata = {
-                "quarter": quarter,
-                "source": os.path.basename(chunked_file_path)
-            }
-            
-            # Add any additional metadata from the embedding
-            if "metadata" in item and isinstance(item["metadata"], dict):
-                metadata.update(item["metadata"])
-                
-            metadatas.append(metadata)
-        
-        # Add data to collection in batches to avoid memory issues
-        batch_size = 100
-        for i in range(0, len(ids), batch_size):
-            end_idx = min(i + batch_size, len(ids))
-            batch_ids = ids[i:end_idx]
-            batch_documents = documents[i:end_idx]
-            batch_embeddings = embedding_vectors[i:end_idx]
-            batch_metadatas = metadatas[i:end_idx]
-            
-            collection.add(
-                ids=batch_ids,
-                documents=batch_documents,
-                embeddings=batch_embeddings,
-                metadatas=batch_metadatas
-            )
-            logger.info(f"Added batch {i//batch_size + 1} ({len(batch_ids)} items) to Chroma")
-        
-        # Get collection count to verify
-        count = collection.count()
-        logger.info(f"Successfully stored {len(embeddings)} embeddings in Chroma collection '{collection_name}' (total count: {count})")
-        
-        return collection_name
-        
-    except Exception as e:
-        logger.error(f"Error storing embeddings in Chroma: {str(e)}")
-        raise
+        # Add embedding if not using an embedding function
+        if embedding_function_name.lower() == "none":
+            embeddings.append(chunk["embedding"])
+    
+    # Add chunks to collection
+    if embedding_function_name.lower() == "none":
+        # Use pre-computed embeddings
+        collection.add(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+            embeddings=embeddings
+        )
+    else:
+        # Let ChromaDB compute embeddings
+        collection.add(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas
+        )
+    
+    print(f"Added {len(chunks)} chunks to collection '{collection_name}'")
+    return collection
+
+# Example usage
+# def example_chromadb_search():
+#     # Load chunks into ChromaDB
+#     collection = load_chunks_into_chroma(
+#         tmp_path="/path/to/your/tmp_file.json",
+#         collection_name="document_chunks",
+#         persist_directory="./chroma_storage",
+#     )
+    
+#     # Example query
+#     query_text = "What is semantic chunking?"
+#     results = collection.query(
+#         query_texts=[query_text],
+#         n_results=3
+#     )
+    
+#     print("\nQuery:", query_text)
+#     print("\nResults:")
+#     for i, (doc, metadata) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
+#         print(f"\nResult {i+1}:")
+#         print(f"Metadata: {metadata}")
+#         print(f"Content: {doc[:150]}...")  # Show first 150 chars
+    
+#     return results
+
+# # Integration with Airflow
+# def airflow_load_to_chroma(**kwargs):
+#     """Function to be used in Airflow DAG"""
+#     ti = kwargs['ti']
+    
+#     # Get the temporary file path from the previous task
+#     tmp_file = ti.xcom_pull(task_ids='chunk_document_task')
+    
+#     # Get other parameters
+#     collection_name = ti.xcom_pull(task_ids='process_request', key='collection_name', default="document_chunks")
+#     persist_dir = ti.xcom_pull(task_ids='process_request', key='chroma_dir', default="./chroma_db")
+    
+#     # Load chunks into ChromaDB
+#     collection = load_chunks_into_chroma(
+#         tmp_path=tmp_file,
+#         collection_name=collection_name,
+#         persist_directory=persist_dir,
+#         embedding_function_name="none"  # Use pre-computed embeddings
+#     )
+    
+#     # Return collection name for next task
+#     return collection_name

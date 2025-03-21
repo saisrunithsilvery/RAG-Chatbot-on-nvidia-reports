@@ -29,24 +29,27 @@ default_args = {
     'retry_delay': timedelta(minutes=5),
 }
 
-PARSER_SERVICE_URLS = {
-    'docling': 'http://localhost:8001/',
-    'mistral_ocr': 'http://localhost:8002/',  # Fixed typo in URL
-    'opensource': 'http://assignment1-parser-service:8003/'
-}
 
-# Define supported chunking strategies
-CHUNKING_STRATEGIES = {
-    'character': chunk_by_character_with_embeddings,
-    'token': chunk_by_tokens_with_embeddings,
-    'recursive': chunk_recursively_with_embeddings
-}
 
-# Define supported vector databases
-VECTOR_DBS = ['pinecone', 'chroma', 'milvus', 'qdrant']
+
+# # Define supported vector databases
+# VECTOR_DBS = ['pinecone', 'chroma', 'milvus', 'qdrant']
 
 # S3 configuration
-S3_BUCKET = 'nvidia-quarterly-reports'
+# S3_BUCKET = 'nvidia-quarterly-reports'
+
+# Define the DAG
+dag = DAG(
+    'document_chunking_pipeline',
+    default_args=default_args,
+    description='Pipeline to chunk documents and generate embeddings',
+    schedule_interval=timedelta(days=1),
+    start_date=datetime(2025, 3, 20),
+)
+
+
+
+
 S3_REGION = 'us-east-1'
 
 def get_s3_client():
