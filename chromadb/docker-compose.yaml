@@ -1,0 +1,15 @@
+services:
+  chroma:
+    image: chromadb/chroma:latest
+    volumes:
+      - chroma-data:/chroma/chroma
+    ports:
+      - "8000:8000"
+    environment:
+      - ALLOW_RESET=true
+      - ANONYMIZED_TELEMETRY=false
+      - PERSIST_DIRECTORY=/chroma/chroma
+    restart: unless-stopped
+
+volumes:
+  chroma-data:
