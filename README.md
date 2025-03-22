@@ -10,6 +10,10 @@ This project implements a complete Retrieval-Augmented Generation (RAG) pipeline
 - **Vector Database Integration**: ChromaDB, FAISS, and Pinecone support
 - **Airflow Orchestration**: Automated pipeline for document processing
 - **Query Interface**: FastAPI and Streamlit components for user interaction
+## Artietcture
+
+<img width="340" alt="image" src="https://github.com/user-attachments/assets/0cc178c2-0337-485b-b8ee-0152b7950fff" />
+
 
 ## Setup Instructions
 
