@@ -70,31 +70,6 @@ def query_llm(prompt, model="gpt-4o", operation_type="chat"):
                 "max_tokens": 1000
             }
         
-        elif operation_type == "summarize":
-            # Get the content_id correctly
-            content_id = st.session_state.active_document.get("content_id")
-            
-            endpoint = f"{PDF_API_URL}/summarize/"
-            
-            # Use a consistent approach to build the payload
-            payload = {
-                "folder_path": st.session_state.active_document.get("folder_path"),
-                "content_id": content_id,  # Always include content_id
-                "model": model,
-                "max_length": 1000
-            }
-
-        elif operation_type == "extract_key_points":
-            # Use the ask_question endpoint with a specific prompt
-            endpoint = f"{PDF_API_URL}/ask_question/"
-            payload = {
-                "folder_path": st.session_state.active_document.get("folder_path"),
-                "content_id": st.session_state.active_document.get("content_id"),  # Always include content_id
-                "question": "Extract and list the key points from this document.",
-                "model": model,
-                "max_tokens": 1000
-            }
-        
         # Calculate start time for processing time tracking
         start_time = datetime.now()
         
@@ -110,8 +85,6 @@ def query_llm(prompt, model="gpt-4o", operation_type="chat"):
             # Extract token usage information - adapt to your API response structure
             if operation_type == "chat" or operation_type == "ask_question":
                 text_field = "answer"
-            else:
-                text_field = "summary"
                 
             input_tokens = result.get("usage", {}).get("prompt_tokens", 0)
             output_tokens = result.get("usage", {}).get("completion_tokens", 0)
@@ -138,191 +111,6 @@ def query_llm(prompt, model="gpt-4o", operation_type="chat"):
     except Exception as e:
         st.error(f"Error communicating with PDF API: {str(e)}")
         return None
-
-def summarize_document(folder_path, model):
-    """Generate a summary of the document"""
-    with st.spinner("Generating document summary..."):
-        API_BACKEND_URL = os.getenv('API_BACKEND_URL', 'http://localhost:8003')
-        
-        # Ensure we have the content_id
-        if 'active_document' not in st.session_state or not st.session_state.active_document:
-            st.error("No active document selected")
-            return None
-            
-        # Get the content_id from active document
-        content_id = st.session_state.active_document.get("content_id")
-        
-        # Prepare payload with explicit content_id
-        payload = {
-            "folder_path": folder_path,
-            "content_id": content_id,  # Always include content_id
-            "model": model,
-            "max_length": 1000
-        }
-        
-        # Calculate start time
-        start_time = datetime.now()
-        
-        # Make API request
-        response = requests.post(f"{API_BACKEND_URL}/pdf/summarize/", json=payload)
-        
-        # Calculate processing time
-        processing_time = (datetime.now() - start_time).total_seconds()
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            # Extract token usage
-            input_tokens = result.get("usage", {}).get("prompt_tokens", 0)
-            output_tokens = result.get("usage", {}).get("completion_tokens", 0)
-            cost = estimate_cost(model, input_tokens, output_tokens)
-            
-            # Update session token usage
-            st.session_state.total_token_usage["input_tokens"] += input_tokens
-            st.session_state.total_token_usage["output_tokens"] += output_tokens
-            st.session_state.total_token_usage["estimated_cost"] += cost
-            
-            # Format result for chat history
-            formatted_result = {
-                "text": result["summary"],
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost": cost,
-                "processing_time": processing_time,
-                "model": model
-            }
-            
-            # Add to chat history
-            st.session_state.chat_history.append({
-                "role": "system",
-                "content": "Document summary generated",
-                "timestamp": datetime.now().strftime("%H:%M:%S")
-            })
-            
-            st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": formatted_result["text"],
-                "usage": {
-                    "input_tokens": formatted_result["input_tokens"],
-                    "output_tokens": formatted_result["output_tokens"],
-                    "cost": formatted_result["cost"]
-                },
-                "model": model,
-                "processing_time": formatted_result["processing_time"],
-                "timestamp": datetime.now().strftime("%H:%M:%S")
-            })
-            
-            # Add to usage history
-            if 'query_usage_history' not in st.session_state:
-                st.session_state.query_usage_history = []
-            
-            st.session_state.query_usage_history.append({
-                "query_type": "summarize",
-                "query": "Document summary request",
-                "model": model,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost": cost,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-            
-            return formatted_result
-        else:
-            st.error(f"Error generating summary: {response.text}")
-            return None
-
-def extract_key_points(folder_path, model):
-    """Extract key points from the document"""
-    with st.spinner("Extracting key points..."):
-        API_BACKEND_URL = os.getenv('API_BACKEND_URL', 'http://localhost:8003')
-        
-        # Ensure we have the content_id
-        if 'active_document' not in st.session_state or not st.session_state.active_document:
-            st.error("No active document selected")
-            return None
-            
-        # Get the content_id from active document
-        content_id = st.session_state.active_document.get("content_id")
-        
-        # Use the ask_question endpoint with a specific question
-        payload = {
-            "folder_path": folder_path,
-            "content_id": content_id,  # Always include content_id
-            "question": "Extract and list the key points from this document.",
-            "model": model,
-            "max_tokens": 1000
-        }
-        
-        # Calculate start time
-        start_time = datetime.now()
-        
-        # Make API request
-        response = requests.post(f"{API_BACKEND_URL}/pdf/ask_question/", json=payload)
-        
-        # Calculate processing time
-        processing_time = (datetime.now() - start_time).total_seconds()
-        
-        if response.status_code == 200:
-            result = response.json()
-            
-            # Extract token usage
-            input_tokens = result.get("usage", {}).get("prompt_tokens", 0)
-            output_tokens = result.get("usage", {}).get("completion_tokens", 0)
-            cost = estimate_cost(model, input_tokens, output_tokens)
-            
-            # Update session token usage
-            st.session_state.total_token_usage["input_tokens"] += input_tokens
-            st.session_state.total_token_usage["output_tokens"] += output_tokens
-            st.session_state.total_token_usage["estimated_cost"] += cost
-            
-            # Format result for chat history
-            formatted_result = {
-                "text": result["answer"],
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost": cost,
-                "processing_time": processing_time,
-                "model": model
-            }
-            
-            # Add to chat history
-            st.session_state.chat_history.append({
-                "role": "system",
-                "content": "Key points extracted",
-                "timestamp": datetime.now().strftime("%H:%M:%S")
-            })
-            
-            st.session_state.chat_history.append({
-                "role": "assistant",
-                "content": formatted_result["text"],
-                "usage": {
-                    "input_tokens": formatted_result["input_tokens"],
-                    "output_tokens": formatted_result["output_tokens"],
-                    "cost": formatted_result["cost"]
-                },
-                "model": model,
-                "processing_time": formatted_result["processing_time"],
-                "timestamp": datetime.now().strftime("%H:%M:%S")
-            })
-            
-            # Add to usage history
-            if 'query_usage_history' not in st.session_state:
-                st.session_state.query_usage_history = []
-            
-            st.session_state.query_usage_history.append({
-                "query_type": "keypoints",
-                "query": "Key points extraction request",
-                "model": model,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cost": cost,
-                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-            
-            return formatted_result
-        else:
-            st.error(f"Error extracting key points: {response.text}")
-            return None
 
 def new_conversation():
     """Create a new conversation"""
@@ -399,17 +187,6 @@ def show_chat_ai():
             margin-bottom: 15px;
         }
         
-        /* Navigation highlight */
-        .nav-highlight {
-            background-color: #4b8bf5;
-            color: white !important;
-            border-radius: 4px;
-            padding: 8px 12px;
-        }
-        .nav-highlight:hover {
-            background-color: #3a7ae0;
-        }
-        
         /* Button styling */
         .primary-button {
             background-color: #4b8bf5 !important;
@@ -438,13 +215,6 @@ def show_chat_ai():
             justify-content: flex-end;
         }
 
-        /* Style for the "Process" button to be compact */
-        .process-btn {
-            padding: 0 8px !important;
-            height: 36px !important;
-            margin-top: 2px !important;
-        }
-
         /* Align text input and file uploader vertically */
         .input-row {
             display: flex;
@@ -455,15 +225,6 @@ def show_chat_ai():
         .file-upload-col {
             width: auto !important;
             flex-shrink: 0 !important;
-        }
-
-        /* Style for the custom paperclip icon */
-        .paperclip-icon {
-            cursor: pointer;
-            margin-top: 6px;
-            margin-left: 5px;
-            font-size: 24px;
-            color: #666;
         }
         </style>
     """, unsafe_allow_html=True)
@@ -478,9 +239,6 @@ def show_chat_ai():
         
     if 'conversation_id' not in st.session_state:
         st.session_state.conversation_id = generate_unique_id()
-        
-    if 'parsed_documents' not in st.session_state:
-        st.session_state.parsed_documents = {}
         
     if 'active_document' not in st.session_state:
         st.session_state.active_document = {}
@@ -569,7 +327,6 @@ def show_chat_ai():
         #     "gemini-pro": {"input": "$0.0005/1K tokens", "output": "$0.0015/1K tokens"}
         # }
         model_pricing = {
-        # OpenAI models
         "openai/gpt-4o": {"input": 0.01, "output": 0.03},
         "openai/gpt-3.5-turbo": {"input": 0.0005, "output": 0.0015},
         "openai/gpt-4-mini": {"input": 0.002, "output": 0.006},  # Using mini instead of turbo
@@ -590,7 +347,6 @@ def show_chat_ai():
         "google/gemini-ultra": {"input": 0.001, "output": 0.003}
     }
         
-        # Show pricing for selected model
         if llm_model_id in model_pricing:
             price_info = model_pricing[llm_model_id]
             st.markdown(f"""
