@@ -12,7 +12,8 @@ This project implements a complete Retrieval-Augmented Generation (RAG) pipeline
 - **Query Interface**: FastAPI and Streamlit components for user interaction
 ## Architecture
 
-![data_processing_workflow](https://github.com/user-attachments/assets/f483bc73-41ec-4ed0-8a37-2f91bb118430)
+![rag_pipeline_with_airflow](https://github.com/user-attachments/assets/c69400c5-6b46-4031-9b00-f9ae76c0d46e)
+
 
 ## Setup Instructions
 
