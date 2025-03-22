@@ -10,6 +10,13 @@ This project implements a complete Retrieval-Augmented Generation (RAG) pipeline
 - **Vector Database Integration**: ChromaDB, FAISS, and Pinecone support
 - **Airflow Orchestration**: Automated pipeline for document processing
 - **Query Interface**: FastAPI and Streamlit components for user interaction
+
+## Hosted Lines:
+- **FASTAPI & Frontend** : http://165.22.179.171:8501/
+- **Airflow** : http://67.205.150.201:8080/home
+- **ChromaDB**: http://159.223.100.38:8000/api/v1/heartbeat
+- **DATA-Parser** http://68.183.17.115/
+ 
 ## Architecture
 
 ![rag_pipeline_with_airflow](https://github.com/user-attachments/assets/c69400c5-6b46-4031-9b00-f9ae76c0d46e)
