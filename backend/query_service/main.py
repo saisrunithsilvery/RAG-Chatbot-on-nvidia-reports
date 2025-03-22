@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(rag_router.router, prefix="/api/v1", tags=["rag"])
+app.include_router(rag_router.router, tags=["rag"])
 
 @app.get("/health")
 async def health_check():

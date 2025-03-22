@@ -1,0 +1,74 @@
+services:
+  rag_api_service:
+    build:
+      context: ./backend/rag_api_service
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_BUCKET_NAME=${AWS_BUCKET_NAME}
+      - AWS_REGION=${AWS_REGION}
+      - DOCLING_ENDPOINT=${DOCLING_ENDPOINT}
+      - MISTRAL_AI_ENDPOINT=${MISTRAL_AI_ENDPOINT}
+      - ENTERPRISE_ENDPOINT=${ENTERPRISE_ENDPOINT}
+      - OPENSOURCE_ENDPOINT=${OPENSOURCE_ENDPOINT}
+    volumes:
+      - ./backend/rag_api_service:/app
+    restart: always
+
+  query_service:
+    build:
+      context: ./backend/query_service
+      dockerfile: Dockerfile
+    ports:
+      - "8005:8005"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - PERPLEXITY_API_KEY=${PERPLEXITY_API_KEY}
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_ENVIRONMENT=${PINECONE_ENVIRONMENT}
+    volumes:
+      - ./backend/query_service:/app
+    restart: always
+
+
+
+  redis:
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: always
+    command: redis-server --save 60 1 --loglevel warning
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./frontend:/app
+    environment:
+      - RAG_API_SERVICE_URL=http://rag_api_service:8000
+      - QUERY_SERVICE_URL=http://query_service:8005/query
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    restart: always
+    depends_on:
+      - rag_api_service
+      - query_service
+      - redis
+
+volumes:
+  redis_data:

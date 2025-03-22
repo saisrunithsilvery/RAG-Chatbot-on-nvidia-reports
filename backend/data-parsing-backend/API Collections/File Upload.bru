@@ -5,17 +5,17 @@ meta {
 }
 
 post {
-  url: http://localhost:8000/process-s3
+  url: http://localhost:8005/query
   body: json
   auth: none
 }
 
 body:json {
   {
-    "method": "s3",
-    "s3_url": "https://damg7245-nvidia-reports.s3.us-east-1.amazonaws.com/raw_reports/nvidia-q1-2021.pdf",
-    "parsetype": "mistral_ai",
-    "chunking_strategy": "recursive",
-    "vectordb": "faiss"
+    "query": "What is the summary?",
+    "collection_name": "nvidia_collection",
+    "top_k": 5,
+    "model": "gpt-4o",
+    "db":"xxxxxxx"
   }
 }

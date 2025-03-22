@@ -5,8 +5,16 @@ setuptools>=65.5.0
 wheel>=0.38.0
 sentence-transformers>=2.2.2
 chromadb>=0.4.18
-pinecone
-
-openai>=1.12.0
+pinecone>=0.1.0  # Changed from pinecone-client to pinecone
 numpy>=1.24.3,<2.0.0
 python-dotenv>=1.0.0
+
+# Core litellm package - handles all LLM provider connections
+litellm>=1.0.0
+
+# Only required for providers you definitely need SDKs for
+openai>=1.12.0  # Core OpenAI SDK
+anthropic>=0.8.0  # For Claude models (optional)
+
+# Optional vector DB support
+faiss-cpu>=1.7.4  # Optional, for FAISS vector DB support

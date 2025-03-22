@@ -141,9 +141,13 @@ async def upload_and_process(
                 try:
                     dag_result = await trigger_airflow_dag(markdown_url, chunking_strategy, vectordb)
                     
+                    # Extract collection_name from the DAG result
+                    collection_name = dag_result.get("collection_name", "")
+                    
                     return {
                         "status": "success",
                         "markdown_url": markdown_url,
+                        "collection_name": collection_name,  # Explicitly include collection_name at the top level
                         "airflow_status": dag_result
                     }
                 except Exception as e:
