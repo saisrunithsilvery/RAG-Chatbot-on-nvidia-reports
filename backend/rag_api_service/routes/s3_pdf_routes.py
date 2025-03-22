@@ -114,9 +114,13 @@ async def process_s3_pdf(request_data: S3ProcessRequest):
             
             dag_result = await trigger_airflow_dag(markdown_url, chunking_strategy, vectordb)
             
+            # Make sure collection_name is included in the main response
+            collection_name = dag_result.get("collection_name", "")
+            
             return {
                 "status": "success",
                 "markdown_url": markdown_url,
+                "collection_name": collection_name,  # Explicitly include collection_name at the top level
                 "airflow_status": dag_result
             }
             

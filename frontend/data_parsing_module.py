@@ -2,13 +2,22 @@ import streamlit as st
 import io
 import base64
 import os
+import sys
+import importlib
 import requests
 import json
 import re
 from datetime import datetime
+import redis_helper
+
+# Ensure redis_helper is properly initialized but don't expose to UI
+if "redis_helper" in sys.modules:
+    importlib.reload(redis_helper)
 
 def show_data_parsing():
     """Display the data parsing page with RAG pipeline integration"""
+    
+    # Remove the Redis Debug expander
     
     # Apply styling
     st.markdown("""
@@ -136,6 +145,25 @@ def show_data_parsing():
     # Initialize session state
     init_session_state()
     
+    # Force synchronization with Redis at the beginning (silently)
+    try:
+        redis_helper.force_sync_session_with_redis()
+    except:
+        # Set default values if Redis fails
+        if 'selected_db' not in st.session_state or not st.session_state.selected_db:
+            st.session_state.selected_db = "chromadb"
+    
+    # Check if we have database info in Redis (silently)
+    try:
+        db_info = redis_helper.get_db_info()
+        if db_info:
+            st.session_state.selected_db = db_info.get('db')
+            st.session_state.collection_name = db_info.get('collection_name')
+    except:
+        # Ensure we have a default DB if Redis fails
+        if 'selected_db' not in st.session_state or not st.session_state.selected_db:
+            st.session_state.selected_db = "chromadb"
+    
     # Main layout
     st.title("📄 Data Parsing & RAG Pipeline")
     st.subheader("Extract Content and Configure RAG Pipeline")
@@ -144,7 +172,7 @@ def show_data_parsing():
     configure_sidebar()
     
     # Main content tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["📥 Data Source", "📄 Content", "🔍 RAG Pipeline", "📊 Analysis"])
+    tab1, tab2, tab3 = st.tabs(["📥 Data Source", "📄 Content", "📊 Analysis"])
     
     with tab1:
         display_data_source_tab(API_EN_URL, API_OP_URL)
@@ -153,9 +181,6 @@ def show_data_parsing():
         display_content_tab()
     
     with tab3:
-        display_rag_pipeline_tab(API_EN_URL)
-    
-    with tab4:
         display_analysis_tab()
 
 def init_session_state():
@@ -168,7 +193,7 @@ def init_session_state():
         st.session_state.parsed_documents = {}
     if 'rag_config' not in st.session_state:
         st.session_state.rag_config = {
-            "vector_db": "faiss",
+            "vector_db": "chromadb",
             "chunking_strategy": "recursive",
             "chunk_size": 500,
             "chunk_overlap": 10
@@ -179,6 +204,11 @@ def init_session_state():
         st.session_state.selected_document = None
     if 's3_files' not in st.session_state:
         st.session_state.s3_files = []
+    # Add new session state variables for database and collection name
+    if 'selected_db' not in st.session_state:
+        st.session_state.selected_db = "chromadb"  # Set default to chromadb
+    if 'collection_name' not in st.session_state:
+        st.session_state.collection_name = None
 
 def configure_sidebar():
     """Configure the sidebar options"""
@@ -193,7 +223,7 @@ def configure_sidebar():
         st.session_state.extraction_type = extraction_type
         
         # Show parser options based on extraction type
-        if extraction_type == "PDF Upload":
+        if extraction_type in ["PDF Upload", "S3 RAW Reports"]:
             extraction_engine = st.radio(
                 "Select Parser Type",
                 ["docling", "mistral_ai", "adobe", "opensource"]
@@ -210,10 +240,29 @@ def configure_sidebar():
         # RAG configuration
         st.markdown("### RAG Pipeline Options")
         
+        # Vector Database selection
+        vector_db_options = ["chromadb", "pinecone"]
+        
+        # Get current value from session state
+        current_db = st.session_state.rag_config.get("vector_db", "chromadb")
+        
+        # Ensure it's a valid option
+        if current_db not in vector_db_options:
+            current_db = "chromadb"
+            st.session_state.rag_config["vector_db"] = current_db
+            
+        # Get the index of the current selection
+        try:
+            default_index = vector_db_options.index(current_db)
+        except:
+            default_index = 0
+            
+        # Show the selectbox with the current value selected
         vector_db = st.selectbox(
             "Vector Database",
-            ["faiss", "chromadb", "pinecone"],
-            index=["faiss", "chromadb", "pinecone"].index(st.session_state.rag_config.get("vector_db", "faiss"))
+            vector_db_options,
+            index=default_index,
+            key="vector_db_selector"  # Add a unique key to track changes
         )
         
         chunking_strategy = st.selectbox(
@@ -225,10 +274,26 @@ def configure_sidebar():
         # Update session state with RAG config
         st.session_state.rag_config["vector_db"] = vector_db
         st.session_state.rag_config["chunking_strategy"] = chunking_strategy
+        
+        # Print the current database selection for debugging
+        print(f"Selected vector database in sidebar: {vector_db}")
+        print(f"Current RAG config: {st.session_state.rag_config}")
+        
+        # Remove Redis test button
 
 def display_data_source_tab(API_EN_URL, API_OP_URL):
     """Display the Data Source tab content"""
     st.header("Data Source")
+    
+    # Reset extracted content when changing source to prevent showing old content
+    if 'previous_selected_document' not in st.session_state:
+        st.session_state.previous_selected_document = None
+        
+    # If selected document has changed, clear content until processed
+    if st.session_state.previous_selected_document != st.session_state.selected_document:
+        st.session_state.extracted_content = ""
+        st.session_state.extraction_metadata = {}
+        st.session_state.previous_selected_document = st.session_state.selected_document
     
     extraction_type = st.session_state.get("extraction_type", "PDF Upload")
     extraction_engine = st.session_state.get("extraction_engine", "docling")
@@ -243,17 +308,34 @@ def display_data_source_tab(API_EN_URL, API_OP_URL):
                 
                 # Get chunking strategy and vector database from RAG config
                 chunking_strategy = st.session_state.rag_config.get("chunking_strategy", "recursive")
-                vectordb = st.session_state.rag_config.get("vector_db", "faiss")
+                vectordb = st.session_state.rag_config.get("vector_db", "chromadb")
                 
-                st.session_state.extracted_content = extract_pdf_text(
-                    API_EN_URL, 
+                UPLOAD_API = "http://rag_api_service:8000"
+                result = extract_pdf_text(
+                    UPLOAD_API, 
                     uploaded_file,
                     parsetype,
                     chunking_strategy,
                     vectordb
                 )
                 
-                if st.session_state.extracted_content:
+                if result and "content" in result:
+                    st.session_state.extracted_content = result["content"]
+                    # Save database and collection name if available in the response
+                    if "db" in result:
+                        st.session_state.selected_db = result["db"]
+                        # Store in Redis silently
+                        try:
+                            redis_helper.set_db_info(
+                                result["db"],
+                                result.get("collection_name")
+                            )
+                        except:
+                            pass  # Silently continue if Redis fails
+                        
+                    if "collection_name" in result:
+                        st.session_state.collection_name = result["collection_name"]
+                    
                     st.success("✅ PDF extracted successfully!")
                     store_document(uploaded_file.name, "pdf", parsetype)
     
@@ -262,8 +344,25 @@ def display_data_source_tab(API_EN_URL, API_OP_URL):
         if url and st.button("🌐 Scrape Content", type="primary"):
             with st.spinner("Scraping website..."):
                 engine = "enterprise" if extraction_engine == "Enterprise" else "opensource"
-                st.session_state.extracted_content = scrape_website(API_EN_URL, API_OP_URL, url, engine)
-                if st.session_state.extracted_content:
+                result = scrape_website(API_EN_URL, API_OP_URL, url, engine)
+                
+                if result and "content" in result:
+                    st.session_state.extracted_content = result["content"]
+                    # Save database and collection name if available in the response
+                    if "db" in result:
+                        st.session_state.selected_db = result["db"]
+                        # Store in Redis silently
+                        try:
+                            redis_helper.set_db_info(
+                                result["db"],
+                                result.get("collection_name")
+                            )
+                        except:
+                            pass  # Silently continue if Redis fails
+                        
+                    if "collection_name" in result:
+                        st.session_state.collection_name = result["collection_name"]
+                    
                     st.success("✅ Website scraped successfully!")
                     store_document(url, "web", engine)
     
@@ -374,21 +473,23 @@ def display_data_source_tab(API_EN_URL, API_OP_URL):
             is_active = st.session_state.selected_document == filename
             doc_class = "document-item active" if is_active else "document-item"
             
-            # Create clickable document item
-            doc_html = f"""
-                <div class='{doc_class}' onclick="this.classList.toggle('active'); window.parent.postMessage({{
-                    type: 'streamlit:setComponentValue',
-                    value: '{filename}'
-                }}, '*');">
-                    <strong>{filename}</strong><br>
-                    <span class='file-tag pdf'>PDF</span>
-                    {f'<span class="file-tag {quarter.lower()}">{quarter}</span>' if quarter else ''}
-                    <small style='color: #6c757d;'>{modified_display} • {size_display}</small>
-                </div>
-            """
+            # Create a unique key for each item to track clicks
+            item_key = f"document_item_{filename}"
             
-            if st.markdown(doc_html, unsafe_allow_html=True):
+            # Create a button for selection instead of the clickable div
+            if st.button(f"{filename}", key=item_key):
                 st.session_state.selected_document = filename
+                
+            # Display file details separately
+            if st.session_state.selected_document == filename:
+                st.markdown(f"""
+                    <div class='document-item active'>
+                        <strong>{filename}</strong><br>
+                        <span class='file-tag pdf'>PDF</span>
+                        {f'<span class="file-tag {quarter.lower()}">{quarter}</span>' if quarter else ''}
+                        <small style='color: #6c757d;'>{modified_display} • {size_display}</small>
+                    </div>
+                """, unsafe_allow_html=True)
         
         st.markdown("</div>", unsafe_allow_html=True)
         
@@ -401,7 +502,11 @@ def display_data_source_tab(API_EN_URL, API_OP_URL):
             
             if selected_file:
                 st.markdown("### Selected Document")
-                st.write(f"**{selected_file.get('filename')}**")
+                st.markdown(f"""
+                    <div style="background-color: #e1efff; padding: 15px; border-radius: 8px; border-left: 4px solid #4b8bf5;">
+                        <h4>{selected_file.get('filename')}</h4>
+                    </div>
+                """, unsafe_allow_html=True)
                 
                 col1, col2 = st.columns(2)
                 with col1:
@@ -415,7 +520,7 @@ def display_data_source_tab(API_EN_URL, API_OP_URL):
                                     # Get parser type, chunking strategy, and vector database
                                     parsetype = extraction_engine
                                     chunking_strategy = st.session_state.rag_config.get("chunking_strategy", "recursive")
-                                    vectordb = st.session_state.rag_config.get("vector_db", "faiss")
+                                    vectordb = st.session_state.rag_config.get("vector_db", "chromadb")
                                     
                                     # Call API to process S3 PDF
                                     response = requests.post(
@@ -434,6 +539,24 @@ def display_data_source_tab(API_EN_URL, API_OP_URL):
                                         if result.get("status") == "success":
                                             markdown_url = result.get("markdown_url")
                                             
+                                            # Save database and collection name if available in the response
+                                            if "db" in result:
+                                                st.session_state.selected_db = result["db"]
+                                                # Store in Redis silently
+                                                try:
+                                                    redis_helper.set_db_info(
+                                                        result["db"],
+                                                        result.get("collection_name")
+                                                    )
+                                                except:
+                                                    pass  # Continue silently if Redis fails
+                                                
+                                            if "collection_name" in result:
+                                                st.session_state.collection_name = result["collection_name"]
+                                            else:
+                                                # Set a default collection name if none provided
+                                                st.session_state.collection_name = "default_collection"
+                                            
                                             # Fetch markdown content
                                             markdown_response = requests.get(markdown_url)
                                             if markdown_response.status_code == 200:
@@ -447,7 +570,9 @@ def display_data_source_tab(API_EN_URL, API_OP_URL):
                                                     "vectordb": vectordb,
                                                     "filename": selected_file.get("filename"),
                                                     "size": selected_file.get("size"),
-                                                    "last_modified": selected_file.get("last_modified")
+                                                    "last_modified": selected_file.get("last_modified"),
+                                                    "db": st.session_state.selected_db,
+                                                    "collection_name": st.session_state.collection_name
                                                 }
                                                 st.success(f"✅ Processed document: {selected_file.get('filename')}")
                                                 store_document(selected_file.get("filename"), "s3", parsetype)
@@ -473,6 +598,16 @@ def display_content_tab():
     """Display the Content tab"""
     st.header("Extracted Content")
     if st.session_state.extracted_content:
+        # Display saved database and collection info if available
+        if st.session_state.selected_db or st.session_state.collection_name:
+            st.subheader("🗄️ Database Information")
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Database:** {st.session_state.selected_db}")
+            with col2:
+                st.write(f"**Collection:** {st.session_state.collection_name if st.session_state.collection_name else 'default'}")
+            st.markdown("---")
+            
         st.markdown(st.session_state.extracted_content)
         st.markdown(get_download_link(st.session_state.extracted_content), unsafe_allow_html=True)
         
@@ -481,80 +616,6 @@ def display_content_tab():
             st.json(st.session_state.extraction_metadata)
     else:
         st.info("💡 No content extracted yet. Please use the Data Source tab to extract content.")
-
-def display_rag_pipeline_tab(API_EN_URL):
-    """Display the RAG Pipeline tab"""
-    st.header("RAG Pipeline Configuration")
-    
-    if not st.session_state.extracted_content:
-        st.warning("⚠️ Please extract or load document content first.")
-    else:
-        # Display current RAG configuration
-        st.markdown(
-            f"""
-            <div class="rag-container">
-            <h3>Current Configuration</h3>
-            <ul>
-                <li><strong>Vector Database:</strong> {st.session_state.rag_config['vector_db']}</li>
-                <li><strong>Chunking Strategy:</strong> {st.session_state.rag_config['chunking_strategy']}</li>
-                <li><strong>Chunk Size:</strong> {st.session_state.rag_config.get('chunk_size', 500)}</li>
-                <li><strong>Chunk Overlap:</strong> {st.session_state.rag_config.get('chunk_overlap', 10)}%</li>
-            </ul>
-            </div>
-            """, 
-            unsafe_allow_html=True
-        )
-        
-        # Process document button
-        if st.button("⚙️ Process Document with RAG Pipeline", type="primary"):
-            with st.spinner("Processing document with RAG pipeline..."):
-                try:
-                    # Get current document info
-                    current_document = get_current_document()
-                    
-                    if current_document:
-                        # Prepare payload for RAG processing
-                        payload = {
-                            "content": current_document.get("content", ""),
-                            "document_name": current_document.get("name", "unknown"),
-                            "document_type": current_document.get("type", "unknown"),
-                            "rag_config": st.session_state.rag_config,
-                            "metadata": current_document.get("metadata", {})
-                        }
-                        
-                        # Call API to process document with RAG pipeline
-                        response = requests.post(
-                            f"{API_EN_URL}/rag-process",
-                            json=payload
-                        )
-                        
-                        if response.status_code == 200:
-                            result = response.json()
-                            if result.get("status") == "success":
-                                st.success("✅ Document processed successfully with RAG pipeline!")
-                                
-                                # Add RAG processing results to session state
-                                st.session_state.rag_results = result.get("results", {})
-                                
-                                # Display metrics
-                                col1, col2, col3 = st.columns(3)
-                                with col1:
-                                    st.metric("Chunks Created", result.get("chunk_count", 0))
-                                with col2:
-                                    st.metric("Indexed Vectors", result.get("vector_count", 0))
-                                with col3:
-                                    st.metric("Processing Time", f"{result.get('processing_time', 0):.2f}s")
-                            else:
-                                st.error(f"RAG Processing Error: {result.get('message', 'Unknown error')}")
-                        else:
-                            st.error(f"API Error: {response.status_code}")
-                except Exception as e:
-                    st.error(f"Error processing document with RAG: {str(e)}")
-        
-        # If results are available, show them
-        if 'rag_results' in st.session_state and st.session_state.rag_results:
-            with st.expander("View RAG Processing Results"):
-                st.json(st.session_state.rag_results)
 
 def display_analysis_tab():
     """Display the Analysis tab"""
@@ -595,15 +656,34 @@ def display_analysis_tab():
                 
                 st.session_state.active_document = current_document
                 
-                # Navigate to the chat page (if implemented)
+                # Make sure database info is saved to Redis before navigating
+                if st.session_state.selected_db:
+                    try:
+                        redis_helper.set_db_info(
+                            st.session_state.selected_db,
+                            st.session_state.collection_name
+                        )
+                    except:
+                        pass  # Continue silently if Redis fails
+                
+                # Navigate to the chat page
                 st.session_state.current_page = "chat_ai"
                 st.rerun()
     else:
         st.info("💡 No content extracted yet. Please extract or load content first.")
 
-def extract_pdf_text(api_url, uploaded_file, parsetype="docling", chunking_strategy="recursive", vectordb="faiss"):
+def extract_pdf_text(api_url, uploaded_file, parsetype="docling", chunking_strategy="recursive", vectordb="chromadb"):
     """Extract text from PDF using the specified parser"""
     PDF_UPLOAD_ENDPOINT = "/upload"
+    
+    # Ensure vectordb is a valid value
+    if vectordb not in ["chromadb", "pinecone"]:
+        st.warning(f"Invalid vectordb value: {vectordb}. Using current selection from UI instead.")
+        # Get value from session state
+        vectordb = st.session_state.rag_config.get("vector_db", "chromadb")
+        
+    # Log the vector database being used
+    print(f"Using vector database: {vectordb}")
     
     try:
         # Prepare file for upload
@@ -625,7 +705,7 @@ def extract_pdf_text(api_url, uploaded_file, parsetype="docling", chunking_strat
             files=files,
             data={"request_data": request_data}
         )
-        print(response.json())
+        
         if response.status_code != 201:
             st.error(f"PDF Upload Error: {response.json().get('detail', 'Unknown error')}")
             return None
@@ -636,19 +716,49 @@ def extract_pdf_text(api_url, uploaded_file, parsetype="docling", chunking_strat
             # Get markdown URL from response
             markdown_url = result_data.get("markdown_url")
             
+            # Extract database and collection info if available
+            db = result_data.get("db")
+            if not db:
+                db = "chromadb"  # Set a default if not provided
+                
+            collection_name = result_data.get("collection_name")
+            if not collection_name:
+                collection_name = "default_collection"  # Set a default if not provided
+            
             # Get markdown content
             markdown_response = requests.get(markdown_url)
             if markdown_response.status_code == 200:
                 content = markdown_response.text
-                st.session_state.extraction_metadata = {
-                    "source_type": "pdf",
-                    "markdown_url": markdown_url,
-                    "parser": parsetype,
-                    "chunking_strategy": chunking_strategy,
-                    "vectordb": vectordb,
-                    "timestamp": datetime.now().isoformat()
+                
+                # Prepare return data
+                result = {
+                    "content": content,
+                    "metadata": {
+                        "source_type": "pdf",
+                        "markdown_url": markdown_url,
+                        "parser": parsetype,
+                        "chunking_strategy": chunking_strategy,
+                        "vectordb": vectordb,
+                        "timestamp": datetime.now().isoformat()
+                    }
                 }
-                return content
+                
+                # Add database info
+                result["db"] = db
+                result["metadata"]["db"] = db
+                result["collection_name"] = collection_name
+                result["metadata"]["collection_name"] = collection_name
+                
+                # Store in Redis (silently)
+                try:
+                    redis_helper.set_db_info(db, collection_name)
+                except:
+                    pass  # Continue silently if Redis fails
+                
+                # Store metadata
+                st.session_state.extraction_metadata = result["metadata"]
+                
+                return result
             else:
                 st.error("Failed to fetch markdown content")
                 return None
@@ -682,15 +792,45 @@ def scrape_website(api_en_url, api_op_url, url, scraping_type="enterprise"):
             result_data = result.json()
             markdown_url = result_data.get("saved_path")
             
+            # Extract database and collection info if available
+            db = result_data.get("db")
+            if not db:
+                db = "chromadb"  # Default to chromadb if not provided
+                
+            collection_name = result_data.get("collection_name")
+            if not collection_name:
+                collection_name = "default_collection"  # Default if not provided
+            
             if result_data["status"] == "success":
                 markdown_response = requests.get(markdown_url)
                 content = markdown_response.text
-                st.session_state.extraction_metadata = {
-                    "source_type": "web",
-                    "source_url": url,
-                    "markdown_file": markdown_url
+                
+                # Prepare return data
+                result = {
+                    "content": content,
+                    "metadata": {
+                        "source_type": "web",
+                        "source_url": url,
+                        "markdown_file": markdown_url
+                    }
                 }
-                return content
+                
+                # Add database info
+                result["db"] = db
+                result["metadata"]["db"] = db
+                result["collection_name"] = collection_name
+                result["metadata"]["collection_name"] = collection_name
+                
+                # Store in Redis silently
+                try:
+                    redis_helper.set_db_info(db, collection_name)
+                except:
+                    pass  # Continue silently if Redis fails
+                
+                # Store metadata
+                st.session_state.extraction_metadata = result["metadata"]
+                
+                return result
         else:
             # Open source web scraping using API
             response = requests.post(
@@ -703,21 +843,51 @@ def scrape_website(api_en_url, api_op_url, url, scraping_type="enterprise"):
             )
             
             if result.status_code != 200:
-                st.error(f"Web Scraping API Error: {response.json().get('detail', 'Unknown error')}")
+                st.error(f"Web Scraping API Error: {result.json().get('detail', 'Unknown error')}")
                 return None
 
             result_data = result.json()
             markdown_url = result_data.get("saved_path")
             
+            # Extract database and collection info if available
+            db = result_data.get("db")
+            if not db:
+                db = "chromadb"  # Default to chromadb if not provided
+                
+            collection_name = result_data.get("collection_name")
+            if not collection_name:
+                collection_name = "default_collection"  # Default if not provided
+            
             if result_data["status"] == "success":
                 markdown_response = requests.get(markdown_url)
                 content = markdown_response.text
-                st.session_state.extraction_metadata = {
-                    "source_type": "web",
-                    "source_url": url,
-                    "markdown_file": markdown_url
+                
+                # Prepare return data
+                result = {
+                    "content": content,
+                    "metadata": {
+                        "source_type": "web",
+                        "source_url": url,
+                        "markdown_file": markdown_url
+                    }
                 }
-                return content
+                
+                # Add database info
+                result["db"] = db
+                result["metadata"]["db"] = db
+                result["collection_name"] = collection_name
+                result["metadata"]["collection_name"] = collection_name
+                
+                # Store in Redis silently
+                try:
+                    redis_helper.set_db_info(db, collection_name)
+                except:
+                    pass  # Continue silently if Redis fails
+                
+                # Store metadata
+                st.session_state.extraction_metadata = result["metadata"]
+                
+                return result
 
     except Exception as e:
         st.error(f"Error scraping website: {str(e)}")
@@ -737,18 +907,65 @@ def store_document(doc_name, doc_type, processor=None):
     if 'parsed_documents' not in st.session_state:
         st.session_state.parsed_documents = {}
     
-    st.session_state.parsed_documents[doc_name] = {
+    # Include database and collection information in the stored document
+    doc_metadata = st.session_state.extraction_metadata.copy() if hasattr(st.session_state, 'extraction_metadata') else {}
+    
+    # Add database info if available - but without Redis messages
+    if st.session_state.selected_db:
+        doc_metadata["db"] = st.session_state.selected_db
+        doc_metadata["collection_name"] = st.session_state.collection_name
+        
+        # Silently store in Redis
+        try:
+            redis_helper.set_db_info(
+                st.session_state.selected_db,
+                st.session_state.collection_name
+            )
+        except:
+            pass  # Continue silently if Redis fails
+    
+    # Store document in session state
+    doc_id = f"{doc_type}_{doc_name}_{datetime.now().isoformat()}"
+    st.session_state.parsed_documents[doc_id] = {
         "name": doc_name,
-        "content": st.session_state.extracted_content,
-        "metadata": st.session_state.extraction_metadata,
         "type": doc_type,
         "processor": processor,
+        "metadata": doc_metadata,
         "timestamp": datetime.now().isoformat()
     }
+    
+    return doc_id
 
 def get_current_document():
-    """Get the current document from session state"""
-    if 'parsed_documents' in st.session_state and st.session_state.parsed_documents:
-        # Get the last processed document
-        doc_name = list(st.session_state.parsed_documents.keys())[-1]
-        return st
+    """Get the current document info for passing to chat module"""
+    if 'selected_db' not in st.session_state or not st.session_state.selected_db:
+        # Set default DB if missing
+        st.session_state.selected_db = "chromadb"
+    
+    # Create a document info dict
+    doc_info = {
+        "name": st.session_state.selected_document if st.session_state.selected_document else "Current Document",
+        "type": "document",
+        "content_id": st.session_state.selected_db,  # Using DB name as content ID
+        "folder_path": st.session_state.collection_name if st.session_state.collection_name else "default"
+    }
+    
+    return doc_info
+
+# Removed check_redis_connectivity function
+
+# Add main function if this is run as a standalone module
+def main():
+    # Set page config
+    st.set_page_config(
+        page_title="Data Parsing & RAG Pipeline",
+        page_icon="📄",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Display the data parsing interface
+    show_data_parsing()
+
+if __name__ == "__main__":
+    main()
