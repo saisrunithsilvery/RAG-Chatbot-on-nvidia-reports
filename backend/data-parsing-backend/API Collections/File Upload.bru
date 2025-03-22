@@ -1,0 +1,21 @@
+meta {
+  name: File Upload
+  type: http
+  seq: 8
+}
+
+post {
+  url: http://localhost:8000/process-s3
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "method": "s3",
+    "s3_url": "https://damg7245-nvidia-reports.s3.us-east-1.amazonaws.com/raw_reports/nvidia-q1-2021.pdf",
+    "parsetype": "mistral_ai",
+    "chunking_strategy": "recursive",
+    "vectordb": "faiss"
+  }
+}
