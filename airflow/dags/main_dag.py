@@ -73,7 +73,7 @@ def process_document(**kwargs):
         # Push parameters to XCom for the chunking task
         ti.xcom_push(key='file_path', value=local_file_path)
         ti.xcom_push(key='chunk_strategy', value=chunking_strategy)
-        ti.xcom_push(key='collection_name', value="nvidia_collection")
+        ti.xcom_push(key='collection_name', value=collection_name)
         ti.xcom_push(key='chroma_persist_dir', value=conf.get('chroma_persist_dir', './chroma_db'))
         ti.xcom_push(key='vectordb', value=vectordb)
         ti.xcom_push(key='s3_key', value=s3_key)
