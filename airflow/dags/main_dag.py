@@ -48,7 +48,7 @@ def process_document(**kwargs):
     vectordb = conf.get('vectordb','chromadb')
     
     # Get collection name for ChromaDB
-    collection_name = conf.get('collection_name', f"collection_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
+    collection_name = conf.get('collection_name', 'nvidia_colllection')
     
     # Validate required parameters
     if not s3_bucket or not s3_key:
@@ -120,7 +120,7 @@ def load_to_vector_db(**kwargs):
     
     # Get data from previous task - FIXED TASK IDs
     tmp_file_path = ti.xcom_pull(task_ids='chunk_document_task')
-    collection_name = "nvidia_collection"
+    collection_name = ti.xcom_pull(task_ids='process_document_task', key='collection_name')
     chroma_persist_dir = ti.xcom_pull(task_ids='process_document_task', key='chroma_persist_dir')
     vectordb = ti.xcom_pull(task_ids='process_document_task', key='vectordb')
     if not tmp_file_path:
