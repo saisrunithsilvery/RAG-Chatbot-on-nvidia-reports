@@ -15,8 +15,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python packages as root
-COPY requirements.txt /requirements.txt
+
 # Switch back to airflow user for security
 USER airflow
+RUN pip install --no-cache-dir git+https://github.com/brandonstarxel/chunking_evaluation.git
+COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir -r /requirements.txt
 

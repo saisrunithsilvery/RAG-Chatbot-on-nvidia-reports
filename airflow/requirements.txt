@@ -40,3 +40,4 @@ tqdm>=4.65.0
 python-dateutil>=2.8.2
 pydantic>=1.10.8
 langchain-huggingface
+git+https://github.com/brandonstarxel/chunking_evaluation.git

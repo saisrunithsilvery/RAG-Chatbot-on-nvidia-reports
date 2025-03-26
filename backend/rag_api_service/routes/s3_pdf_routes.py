@@ -38,7 +38,7 @@ async def trigger_airflow_dag(markdown_url: str, chunking_strategy: str, vectord
         s3_bucket = parsed_url.netloc.split('.')[0]  # Extract bucket name
         s3_key = '/'.join(path_parts)  # S3 key
         
-        collection_name = f"collection_{uuid.uuid4().hex[:12]}"
+        collection_name = f"collection_{s3_key}"
         
         payload = {
             "conf": {

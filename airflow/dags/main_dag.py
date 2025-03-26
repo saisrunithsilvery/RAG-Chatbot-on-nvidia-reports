@@ -10,6 +10,7 @@ from rag.chunking import chunk_document
 from vectordb.chromadb import load_chunks_into_chroma
 from vectordb.nonvector import load_chunks_into_faiss
 from vectordb.pinecone import load_chunks_into_pinecone
+import re
 
 # Define default arguments for the DAG
 default_args = {
@@ -49,6 +50,15 @@ def process_document(**kwargs):
     
     # Get collection name for ChromaDB
     collection_name = conf.get('collection_name', 'nvidia_colllection')
+
+    ##getting the year and quarter from the s3_key
+    match = re.search(r"(q\d{1,2})-(\d{4})", s3_key)
+
+    if match: 
+        quarter = match.group(1)  # e.g., "q1"
+        year = match.group(2)     
+
+
     
     # Validate required parameters
     if not s3_bucket or not s3_key:
@@ -77,6 +87,8 @@ def process_document(**kwargs):
         ti.xcom_push(key='chroma_persist_dir', value=conf.get('chroma_persist_dir', './chroma_db'))
         ti.xcom_push(key='vectordb', value=vectordb)
         ti.xcom_push(key='s3_key', value=s3_key)
+        ti.xcom_push(key='year', value=year)
+        ti.xcom_push(key='quarter', value=quarter)
         return local_file_path
         
     except Exception as e:
@@ -123,6 +135,9 @@ def load_to_vector_db(**kwargs):
     collection_name = ti.xcom_pull(task_ids='process_document_task', key='collection_name')
     chroma_persist_dir = ti.xcom_pull(task_ids='process_document_task', key='chroma_persist_dir')
     vectordb = ti.xcom_pull(task_ids='process_document_task', key='vectordb')
+    year = ti.xcom_pull(task_ids='process_document_task', key='year')
+    quarter = ti.xcom_pull(task_ids='process_document_task', key='quarter')
+    chunk_strategy = ti.xcom_pull(task_ids='process_document_task', key='chunk_strategy')
     if not tmp_file_path:
         raise ValueError("No temporary file path found from previous task")
     
@@ -145,7 +160,11 @@ def load_to_vector_db(**kwargs):
             print(f"Loading chunks into Pinecone collection: {collection_name}")
             collection = load_chunks_into_pinecone(
                 tmp_path=tmp_file_path,
-                collection_name=collection_name
+                collection_name=collection_name,
+                year=year,
+                quarter=quarter,
+                chunk_strategy=chunk_strategy
+
             )    
         else:
             raise ValueError(f"Unsupported vector database: {vectordb}")

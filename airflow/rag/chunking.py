@@ -2,6 +2,10 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTex
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.docstore.document import Document
 from langchain.document_loaders import WebBaseLoader
+from chunking_evaluation.chunking import ClusterSemanticChunker
+from langchain_openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain.document_loaders import UnstructuredMarkdownLoader
 from typing import List, Dict, Any, Optional
 import os
 import requests
@@ -31,22 +35,20 @@ def chunk_document(
         List of dictionaries containing chunk text, embeddings, and metadata
     """
     print(f"This is my debug message: {url}")
-    chunk_size = 300
-    chunk_overlap = 50
-    min_chunk_size = 200
-    model_name= "sentence-transformers/all-MiniLM-L6-v2"
+    chunk_size = 400
+    chunk_overlap = 150
+    model_name= "text-embedding-3-large"
     
     # Common metadata for all chunks
     common_metadata = {
         "source": url,
         "chunking_strategy": chunking_strategy,
-        "chunk_size": chunk_size, 
         "embedding_model": model_name,
         "processing_timestamp": datetime.now().isoformat(),
     }
     
     # Add chunk_overlap for traditional chunkers
-    if chunking_strategy.lower() in ["character", "token", "recursive"]:
+    if chunking_strategy.lower() in ["character", "token", "recursive","kamradt"]:
         common_metadata["chunk_overlap"] = chunk_overlap
     
     # Choose chunking strategy
@@ -62,6 +64,11 @@ def chunk_document(
         result = chunk_recursively_with_embeddings(
             url, chunk_size, chunk_overlap, model_name, common_metadata
         )
+    elif chunking_strategy.lower() == "kamradt":
+        result = chunk_cluster_with_embeddings(
+            url, chunk_size, model_name=model_name, common_metadata=common_metadata
+        )
+         
     else:
         raise ValueError(f"Unknown chunking strategy: {chunking_strategy}")
     
@@ -76,24 +83,47 @@ def chunk_document(
     return result, tmp_path
 
 def _load_document(url: str) -> List[Document]:
-    """Helper function to load document from URL or file path"""
+    """
+    Helper function to load document from URL or file path,
+    with special handling for Markdown files.
+    """
     try:
         # Check if it's a web URL or a local file path
         if url.startswith(('http://', 'https://')):
-            # Use WebBaseLoader for web URLs
-            loader = WebBaseLoader(url)
+            # Use appropriate loader based on file extension
+            if url.endswith('.md'):
+                # For Markdown files from web
+                loader = UnstructuredMarkdownLoader(url)
+            else:
+                # General web content
+                loader = WebBaseLoader(url)
             docs = loader.load()
         else:
-            # For local file paths, read directly
-            with open(url, 'r', encoding='utf-8') as file:
-                content = file.read()
-            # Extract filename for metadata
+            # For local file paths
             filename = os.path.basename(url)
-            docs = [Document(page_content=content, metadata={"source": filename})]
+            
+            # Special handling for Markdown files
+            if url.endswith('.md'):
+                try:
+                    # Try to use MarkdownLoader if available
+                    loader = UnstructuredMarkdownLoader(url)
+                    docs = loader.load()
+                except (ImportError, Exception) as e:
+                    # Fallback: read raw content and apply basic Markdown processing
+                    with open(url, 'r', encoding='utf-8') as file:
+                        content = file.read()
+                    # You could add basic Markdown parsing here if needed
+                    docs = [Document(page_content=content, metadata={"source": filename})]
+            else:
+                # Standard file handling
+                with open(url, 'r', encoding='utf-8') as file:
+                    content = file.read()
+                docs = [Document(page_content=content, metadata={"source": filename})]
     except Exception as e:
         raise Exception(f"Error loading content from {url}: {e}")
     
     return docs
+
 
 def chunk_by_character_with_embeddings(
     url: str,
@@ -145,8 +175,7 @@ def chunk_by_character_with_embeddings(
         chunk_metadata = {
             **chunk.metadata,
             **common_metadata,
-            "chunk_index": i,
-            "total_chunks": len(chunks)
+            
         }
         
         result.append({
@@ -220,14 +249,14 @@ def chunk_by_tokens_with_embeddings(
 
 def chunk_recursively_with_embeddings(
     url: str,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
+    chunk_size: int = 200,
+    chunk_overlap: int = 40,
     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
     common_metadata: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
     """
     Downloads a document from a URL or file path, chunks text using RecursiveCharacterTextSplitter,
-    and converts chunks to embeddings.
+    and converts chunks to embeddings. Creates a flat metadata structure for Pinecone compatibility.
     """
     if common_metadata is None:
         common_metadata = {}
@@ -246,29 +275,45 @@ def chunk_recursively_with_embeddings(
     # Split the documents
     chunks = text_splitter.split_documents(docs)
     
-    # Create results for each chunk
+    # Create results for each chunk with COMPLETELY FLAT structure
     result = []
     for i, chunk in enumerate(chunks):
-        # Create a metadata dictionary for this chunk
-        chunk_metadata = {
-            **chunk.metadata,
-            **common_metadata,
-            "chunk_index": i,
-            "total_chunks": len(chunks)
+        # Create a flat dictionary with all metadata as top-level fields
+        chunk_dict = {
+            "text": chunk.page_content,
         }
         
-        # Add this chunk to the result list with the correct structure
-        result.append({
-            "text": chunk.page_content,
-            "metadata": chunk_metadata
-        })
+        # Add document metadata
+        for key, value in chunk.metadata.items():
+            if isinstance(value, (str, int, float, bool)):
+                chunk_dict[key] = value
+            elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+                chunk_dict[key] = value
+            else:
+                # Convert complex types to strings
+                chunk_dict[key] = str(value)
+        
+        # Add common metadata
+        for key, value in common_metadata.items():
+            if isinstance(value, (str, int, float, bool)):
+                chunk_dict[key] = value
+            elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+                chunk_dict[key] = value
+            else:
+                # Convert complex types to strings
+                chunk_dict[key] = str(value)
+        
+        # Add chunk index and total chunks
+        chunk_dict["chunk_index"] = i
+        chunk_dict["total_chunks"] = len(chunks)
+        
+        result.append(chunk_dict)
         
         # Print progress message (optional)
         if i % 10 == 0 or i == len(chunks) - 1:
             print(f"Processed chunk {i+1}/{len(chunks)}")
     
     return result
-
 # def chunk_kamradt_with_embeddings(
 #     url: str,
 #     chunk_size: int = 300,
@@ -337,76 +382,74 @@ def chunk_recursively_with_embeddings(
     
 #     return result
 
-# def chunk_cluster_with_embeddings(
-#     url: str,
-#     max_chunk_size: int = 300,
-#     model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
-#     common_metadata: Optional[Dict[str, Any]] = None
-# ) -> List[Dict[str, Any]]:
-#     """
-#     Downloads a document from a URL or file path, chunks text using ClusterSemanticChunker,
-#     and converts chunks to embeddings.
+def chunk_cluster_with_embeddings(
+    url: str,
+    max_chunk_size: int = 500,
+    model_name: str = "text-embedding-3-large",
+    common_metadata: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Downloads a document from a URL or file path (supports Markdown files),
+    chunks text using ClusterSemanticChunker, and converts chunks to embeddings.
     
-#     Args:
-#         url: URL or file path of the document
-#         max_chunk_size: Maximum size of each chunk in tokens
-#         model_name: Name of the embedding model to use
-#         common_metadata: Common metadata to include with each chunk
+    Args:
+        url: URL or file path of the document (supports .md files)
+        max_chunk_size: Maximum size of each chunk in tokens
+        model_name: Name of the embedding model to use
+        common_metadata: Common metadata to include with each chunk
         
-#     Returns:
-#         List of dictionaries containing chunk text and embeddings
-#     """
-#     if common_metadata is None:
-#         common_metadata = {}
+    Returns:
+        List of dictionaries containing chunk text and embeddings
+    """
+    if common_metadata is None:
+        common_metadata = {}
     
-#     # Load the document
-#     docs = _load_document(url)
+    # Load the document (handles Markdown files)
+    docs = _load_document(url)
+    openai_api_key=os.getenv("OPENAI_API_KEY")
+    # Initialize OpenAI embeddings model
+    # openai_embeddings = OpenAIEmbeddings(
+    #     model=model_name,
+    #     openai_api_key=openai_api_key
+    # )
     
-#     # Initialize HuggingFace embeddings model
-#     # hf_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+    # Define token counting function (using tiktoken for OpenAI-compatible tokenization)
+    def token_counter(text):
+        encoding = tiktoken.get_encoding("cl100k_base")
+        return len(encoding.encode(text))
     
-#     # Create a wrapper embedding function compatible with ClusterSemanticChunker
-#     # def embedding_function(texts):
-#     #     if isinstance(texts, str):
-#     #         return hf_embeddings.embed_query(texts)
-#     #     return [hf_embeddings.embed_query(text) for text in texts]
+    # Initialize the ClusterSemanticChunker
+    text_splitter = ClusterSemanticChunker(
+        max_chunk_size=max_chunk_size,
+        length_function=token_counter
+    )
     
-#     # Define token counting function (using tiktoken for OpenAI-compatible tokenization)
-#     def token_counter(text):
-#         encoding = tiktoken.get_encoding("cl100k_base")
-#         return len(encoding.encode(text))
-    
-#     # Initialize the ClusterSemanticChunker
-#     text_splitter = ClusterSemanticChunker(
-#         max_chunk_size=max_chunk_size,
-#         length_function=token_counter
-#     )
-    
-#     # Process each document
-#     result = []
-#     for doc in docs:
-#         # Split the document text
-#         chunks = text_splitter.split_text(doc.page_content)
+    # Process each document
+    result = []
+    for doc in docs:
+        # Split the document text
+        chunks = text_splitter.split_text(doc.page_content)
         
-#         # Create embeddings for each chunk
-#         # for i, chunk_text in enumerate(chunks):
-#         #     embedding_vector = hf_embeddings.embed_query(chunk_text)
+        # Create embeddings for each chunk
+        for i, chunk_text in enumerate(chunks):
             
-#             # Combine document metadata with common metadata
-#         chunk_metadata = {
-#             **doc.metadata,
-#             **common_metadata,
-#             "chunk_index": i,
-#             "total_chunks": len(chunks),
-#             "chunking_strategy": "cluster"
-#         }
+            # Create simplified metadata
+            chunk_metadata = {
+                "source": doc.metadata.get("source", url),
+                "chunk_index": i,
+                "total_chunks": len(chunks),
+                "chunking_strategy": "cluster"
+            }
             
-#         result.append({
-#             "chunks": chunks,
-#             "metadata": chunk_metadata
-#         })
+            # Add any common metadata
+            chunk_metadata.update(common_metadata)
+            
+            result.append({
+                "text": chunk_text,
+                "metadata": chunk_metadata
+            })
 
-#     return result
+    return result
 
 # Example usage for Airflow integration
 # def airflow_chunk_document(**kwargs):
