@@ -1,4 +1,4 @@
-# ASSIGNMENT4B
+
 # RAG Pipeline with Airflow
 
 ## Project Overview
