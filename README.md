@@ -117,7 +117,3 @@ curl -X POST \
 3. **S3 Access Errors**:
    - Verify AWS credentials and permissions
    - Confirm S3 bucket and object permissions
-
-## Contributors
-Sai Srunith Silvery: 50 1/2% - Airflow pipeline , pinecone, Mistral OCR
-Vishal Prasanna: 50 1/2% - Chroma Db, Streamlit, Doculing, Integration
